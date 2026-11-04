@@ -244,11 +244,18 @@ jobs:
 
       # 没有开发者证书：在工程里关掉签名，archive 照常出 .app，最后一步导出 IPA 会因为没签名失败，
       # 所以下面直接从 xcarchive 里取 .app 自己打包成 IPA（与 xcodebuild -exportArchive 产物结构一致）。
-      - name: 关闭代码签名
+      - name: 关闭代码签名 + 修 Xcode 26 链接路径
         run: |
           PBX="$(ls -d src-tauri/gen/apple/*.xcodeproj)/project.pbxproj"
           perl -0pi -e 's/buildSettings = \{/buildSettings = {\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;/g' "$PBX"
           grep -c 'CODE_SIGNING_ALLOWED = NO' "$PBX"
+          # Xcode 26 的 $(TOOLCHAIN_DIR) 指到 Metal 工具链，链接时找不到 swiftCompatibility56 等库。
+          # tauri 新模板已改成显式的 XcodeDefault 工具链（tauri-apps/tauri@80c1425），这里对 2.10 生成的工程打同样的补丁。
+          for f in "$PBX" src-tauri/gen/apple/project.yml; do
+            sed -i '' 's#$(TOOLCHAIN_DIR)/usr/lib/swift#$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift#g' "$f"
+          done
+          grep -c 'XcodeDefault.xctoolchain/usr/lib/swift' "$PBX"
+          ! grep -q 'TOOLCHAIN_DIR)/usr/lib/swift' "$PBX"
 
       # 导出 IPA 那一步会因为没签名失败（预期内），只要 xcarchive 里有 .app 就算成功。
       # 真失败时把报错写成 annotation：Actions 日志要登录才能看，annotation 公开可见。
