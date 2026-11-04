@@ -29,6 +29,10 @@ type Props = {
   onPlaying?: () => void;
   onPause?: () => void;
   onWaiting?: () => void;
+  /** 当前播放点所在缓冲区间的末尾（秒），用来画缓冲条 */
+  onBuffered?: (end: number) => void;
+  /** 跳转开始 / 完成（拖进度到没缓冲的地方要等分片下载，暂停态也要给转圈） */
+  onSeeking?: (seeking: boolean) => void;
   onEnded?: () => void;
   onError?: (msg: string) => void;
   onClick?: () => void;
@@ -38,7 +42,7 @@ type Props = {
 /** 只负责「播」：hls.js + video 元素，控制条由外层渲染。 */
 const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   { src, poster, autoPlay = true, muted = false, loop = false, fit = "contain", volume = 1, rate = 1,
-    onTime, onDuration, onSize, onPlaying, onPause, onWaiting, onEnded, onError, onClick, className = "" },
+    onTime, onDuration, onSize, onPlaying, onPause, onWaiting, onBuffered, onSeeking, onEnded, onError, onClick, className = "" },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -81,10 +85,13 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     applySettings();
 
     if (useHls && Hls.isSupported()) {
+      /* 分片约 5 秒 / 2MB。往前多缓冲一些，往回拖也不必重下；
+         iOS 的 ManagedMediaSource 内存吃紧时系统会自己回收，不用担心撑爆 */
       const hls = new Hls({
         enableWorker: true,
-        maxBufferLength: 30,
-        backBufferLength: 30,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
+        backBufferLength: 90,
         manifestLoadingTimeOut: 20000,
         manifestLoadingMaxRetry: 3,
         fragLoadingMaxRetry: 4,
@@ -95,6 +102,8 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (autoPlay) video.play().catch(() => {});
       });
+      /* MSE 下 progress 事件不一定触发，分片写进缓冲时主动报一次 */
+      hls.on(Hls.Events.BUFFER_APPENDED, () => reportBuffered(video));
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (!data.fatal) return;
         onError?.(`${data.type}/${data.details}`);
@@ -123,6 +132,18 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     v.playbackRate = rate;
   };
 
+  /* 只报「当前播放点所在区间」的末尾：拖过去的地方前后可能有好几段不连续的缓冲 */
+  const reportBuffered = (v: HTMLVideoElement) => {
+    if (!onBuffered) return;
+    const b = v.buffered;
+    const t = v.currentTime;
+    let end = 0;
+    for (let i = 0; i < b.length; i++) {
+      if (b.start(i) <= t + 0.5 && b.end(i) >= t) { end = b.end(i); break; }
+    }
+    onBuffered(end);
+  };
+
   return (
     <video
       ref={videoRef}
@@ -133,7 +154,10 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       className={`w-full h-full bg-black ${fit === "cover" ? "object-cover" : "object-contain"} ${className}`}
       style={{ opacity: ready ? 1 : 0, transition: "opacity .35s" }}
       onLoadedData={(e) => { setReady(true); reapply(e.target as HTMLVideoElement); }}
-      onTimeUpdate={(e) => onTime?.((e.target as HTMLVideoElement).currentTime)}
+      onTimeUpdate={(e) => { const v = e.target as HTMLVideoElement; onTime?.(v.currentTime); reportBuffered(v); }}
+      onProgress={(e) => reportBuffered(e.target as HTMLVideoElement)}
+      onSeeking={(e) => { onSeeking?.(true); reportBuffered(e.target as HTMLVideoElement); }}
+      onSeeked={(e) => { onSeeking?.(false); reportBuffered(e.target as HTMLVideoElement); }}
       onLoadedMetadata={(e) => {
         const v = e.target as HTMLVideoElement;
         reapply(v);

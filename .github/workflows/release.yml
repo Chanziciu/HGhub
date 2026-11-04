@@ -12,7 +12,7 @@ concurrency:
 
 env:
   CI: "true"
-  # 本次发布要出哪些平台的包（空格分隔：windows android ios）。v1.0.2 只出 iOS。
+  # 本次发布要出哪些平台的包（空格分隔：windows android ios）。目前只出 iOS。
   RELEASE_PLATFORMS: ios
 
 jobs:

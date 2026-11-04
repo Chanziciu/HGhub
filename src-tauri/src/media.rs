@@ -8,7 +8,7 @@ use aes::cipher::{BlockDecrypt, KeyInit};
 use aes::Aes128;
 use once_cell::sync::Lazy;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tauri::http::{Response, StatusCode};
 
@@ -17,7 +17,8 @@ const IMG_IV: &[u8] = b"97b60394abc2fbe1";
 
 static IMG_CACHE: Lazy<Mutex<HashMap<String, Arc<Vec<u8>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
-static PL_CACHE: Lazy<Mutex<HashMap<String, Arc<String>>>> =
+/// 播放列表 → (改写后的文本, 原始分片地址序列)
+static PL_CACHE: Lazy<Mutex<HashMap<String, (Arc<String>, Arc<Vec<String>>)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 const IMG_CACHE_MAX: usize = 240;
@@ -141,13 +142,16 @@ fn rewrite_uri_attr(line: &str, prefix: &str) -> String {
 
 /// 取 m3u8 并把 key / 分片地址改写到本地协议。
 pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, String> {
-    if let Some(hit) = PL_CACHE.lock().unwrap().get(url).cloned() {
-        return Ok(hit);
+    if let Some((text, segs)) = PL_CACHE.lock().unwrap().get(url).cloned() {
+        index_segments(&segs);
+        return Ok(text);
     }
     let (_, bytes) = fetch_bytes(url).await?;
     let text = String::from_utf8_lossy(&bytes).to_string();
 
     let mut out = String::with_capacity(text.len() + 512);
+    let mut segs = Vec::new();
+    let mut after_inf = false;
     for raw in text.lines() {
         let line = raw.trim_end();
         if line.is_empty() {
@@ -155,6 +159,7 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
             continue;
         }
         if line.starts_with('#') {
+            after_inf |= line.starts_with("#EXTINF");
             if line.starts_with("#EXT-X-KEY") || line.starts_with("#EXT-X-MAP") {
                 // 先把相对 URI 绝对化再改写
                 let absolute = absolutize_uri_in_attr(url, line);
@@ -165,12 +170,19 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
         } else {
             let absolute = absolutize(url, line);
             out.push_str(&format!("{prefix}/seg?u={}", enc(&absolute)));
+            // 只记 #EXTINF 后面的媒体分片；master 列表里的子列表不预取
+            if after_inf {
+                segs.push(absolute);
+            }
+            after_inf = false;
         }
         out.push('\n');
     }
 
     let arc = Arc::new(out);
-    cache_put(&PL_CACHE, url.to_string(), arc.clone(), PL_CACHE_MAX);
+    let segs = Arc::new(segs);
+    index_segments(&segs);
+    cache_put(&PL_CACHE, url.to_string(), (arc.clone(), segs), PL_CACHE_MAX);
     Ok(arc)
 }
 
@@ -186,10 +198,111 @@ fn absolutize_uri_in_attr(base: &str, line: &str) -> String {
     line.to_string()
 }
 
-/// 清空封面 / 播放列表内存缓存
+/* ───────────────────────── 分片缓存 + 预取 ─────────────────────────
+ * 分片约 5 秒 / 2MB，以前每次都现下：拖进度到没缓冲的地方，要等整片从上游下完才出画面。
+ * 现在：同一分片并发请求只下一次（hls.js 取消重发、预取撞车都会合并），
+ * 下完留在内存里（往回拖秒开），每取一片就顺序往后预取几片。 */
+
+type Seg = (Option<String>, Arc<Vec<u8>>);
+type SegCell = Arc<tokio::sync::OnceCell<Result<Seg, String>>>;
+
+/// 分片缓存上限：约 30 片 / 2.5 分钟
+const SEG_CACHE_BYTES: usize = 64 * 1024 * 1024;
+/// 每取一片，往后预取几片（约 15 秒）
+const SEG_PREFETCH: usize = 3;
+const SEG_INDEX_MAX: usize = 20_000;
+
+#[derive(Default)]
+struct SegCache {
+    cells: HashMap<String, SegCell>,
+    /// 已下完的分片按完成先后排，超预算从最旧的扔
+    done: VecDeque<(String, usize)>,
+    bytes: usize,
+}
+
+static SEG_CACHE: Lazy<Mutex<SegCache>> = Lazy::new(|| Mutex::new(SegCache::default()));
+/// 分片地址 → (所在播放列表的分片序列, 下标)，预取时据此找「下一片」
+static SEG_INDEX: Lazy<Mutex<HashMap<String, (Arc<Vec<String>>, usize)>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn index_segments(segs: &Arc<Vec<String>>) {
+    let Some(first) = segs.first() else { return };
+    let mut idx = SEG_INDEX.lock().unwrap();
+    if idx.contains_key(first) {
+        return;
+    }
+    if idx.len() + segs.len() > SEG_INDEX_MAX {
+        idx.clear();
+    }
+    for (i, u) in segs.iter().enumerate() {
+        idx.insert(u.clone(), (segs.clone(), i));
+    }
+}
+
+fn seg_account(url: &str, len: usize) {
+    let mut c = SEG_CACHE.lock().unwrap();
+    c.done.push_back((url.to_string(), len));
+    c.bytes += len;
+    while c.bytes > SEG_CACHE_BYTES && c.done.len() > 1 {
+        let Some((old, n)) = c.done.pop_front() else { break };
+        c.bytes = c.bytes.saturating_sub(n);
+        c.cells.remove(&old);
+    }
+}
+
+/// 取分片：命中缓存直接返回；正在下的就等同一个下载；失败不缓存。
+async fn load_segment(url: &str) -> Result<Seg, String> {
+    let cell: SegCell = SEG_CACHE.lock().unwrap().cells.entry(url.to_string()).or_default().clone();
+    let res = cell
+        .get_or_init(|| async {
+            let r = fetch_bytes(url).await.map(|(ct, b)| (ct, Arc::new(b)));
+            if let Ok((_, b)) = &r {
+                seg_account(url, b.len());
+            }
+            r
+        })
+        .await
+        .clone();
+    if res.is_err() {
+        let mut c = SEG_CACHE.lock().unwrap();
+        if c.cells.get(url).is_some_and(|x| Arc::ptr_eq(x, &cell)) {
+            c.cells.remove(url);
+        }
+    }
+    res
+}
+
+/// 后台按顺序预取 `url` 之后的几片（顺序下，带宽先给最近要播的那片）。
+fn prefetch_after(url: &str) {
+    let next: Vec<String> = {
+        let idx = SEG_INDEX.lock().unwrap();
+        let Some((segs, i)) = idx.get(url) else { return };
+        let cache = SEG_CACHE.lock().unwrap();
+        segs.iter()
+            .skip(i + 1)
+            .take(SEG_PREFETCH)
+            .filter(|u| !cache.cells.contains_key(*u))
+            .cloned()
+            .collect()
+    };
+    if next.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        for u in next {
+            if load_segment(&u).await.is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// 清空封面 / 播放列表 / 分片内存缓存
 pub fn clear_caches() {
     if let Ok(mut g) = IMG_CACHE.lock() { g.clear(); }
     if let Ok(mut g) = PL_CACHE.lock() { g.clear(); }
+    if let Ok(mut g) = SEG_CACHE.lock() { *g = SegCache::default(); }
+    if let Ok(mut g) = SEG_INDEX.lock() { g.clear(); }
 }
 
 /* ───────────────────────── 协议响应 ───────────────────────── */
@@ -236,13 +349,16 @@ pub async fn handle(path: &str, query: &str, prefix: &str) -> Response<Vec<u8>> 
             ),
             Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
         },
-        "/seg" => match fetch_bytes(&target).await {
-            Ok((ctype, bytes)) => respond(
-                200,
-                ctype.as_deref().unwrap_or("application/octet-stream"),
-                bytes,
-                "public, max-age=3600",
-            ),
+        "/seg" => match load_segment(&target).await {
+            Ok((ctype, bytes)) => {
+                prefetch_after(&target);
+                respond(
+                    200,
+                    ctype.as_deref().unwrap_or("application/octet-stream"),
+                    bytes.as_ref().clone(),
+                    "public, max-age=3600",
+                )
+            }
             Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
         },
         _ => respond(404, "text/plain", b"not found".to_vec(), "no-store"),
@@ -278,6 +394,41 @@ mod tests {
         println!("segment status={} len={}", seg.status(), seg.body().len());
         assert_eq!(seg.status(), 200);
         assert!(seg.body().len() > 1000);
+    }
+
+    #[tokio::test]
+    async fn segment_cache_and_prefetch() {
+        use crate::net::edge;
+        use std::time::{Duration, Instant};
+        let play = edge("GET", "/api/videos/117/play?ep=3&page_texts=0", None, None).await
+            .expect("play api");
+        let url = play["video_url"].as_str().expect("video_url").to_string();
+        let resp = handle("/hls", &format!("u={}", enc(&url)), "http://hg.localhost").await;
+        let body = String::from_utf8_lossy(resp.body()).to_string();
+        let segs: Vec<String> = body.lines()
+            .filter(|l| !l.starts_with('#') && l.contains("/seg?u="))
+            .map(|l| l.split("?u=").nth(1).unwrap().to_string())
+            .collect();
+        assert!(segs.len() > 50, "too few segments");
+
+        // 同一分片并发请求只下一次
+        let q = format!("u={}", segs[40]);
+        let t = Instant::now();
+        let (a, b) = tokio::join!(handle("/seg", &q, "http://hg.localhost"), handle("/seg", &q, "http://hg.localhost"));
+        println!("cold seg 40: {:?} len={}", t.elapsed(), a.body().len());
+        assert_eq!(a.status(), 200);
+        assert_eq!(a.body(), b.body());
+        assert_eq!(SEG_CACHE.lock().unwrap().done.iter().filter(|(u, _)| *u == dec(&segs[40])).count(), 1);
+
+        // 之后几片应已在后台预取
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        for i in 41..=40 + SEG_PREFETCH {
+            let t = Instant::now();
+            let r = handle("/seg", &format!("u={}", segs[i]), "http://hg.localhost").await;
+            println!("prefetched seg {i}: {:?} len={}", t.elapsed(), r.body().len());
+            assert_eq!(r.status(), 200);
+            assert!(t.elapsed() < Duration::from_millis(200), "seg {i} not prefetched");
+        }
     }
 
     #[tokio::test]

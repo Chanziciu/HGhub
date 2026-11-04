@@ -46,7 +46,9 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [vsize, setVsize] = useState({ w: 0, h: 0 });
+  /** 当前播放点往后已缓冲到的时间（秒） */
   const [buffered, setBuffered] = useState(0);
+  const [seeking, setSeeking] = useState(false);
   const [paused, setPaused] = useState(false);
   const [rate, setRate] = useState(1);
   const [waiting, setWaiting] = useState(false);
@@ -138,6 +140,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const effRate = holdSpeed || speedLock ? 2 : rate;
   /* 进度条显示百分比（拖动时用拖动值） */
   const barProgress = barPct ?? (duration ? time / duration : 0);
+  const bufProgress = duration ? Math.min(1, buffered / duration) : 0;
   /* 沉浸全屏 + 横屏视频 → 舞台旋转 90°，看起来就是横屏 */
   const rotated = !isDesktop && fs && vsize.w > vsize.h && vsize.h > 0;
 
@@ -212,7 +215,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   /* 切换条目/集数时重置播放状态 */
   useEffect(() => {
-    setTime(0); setDuration(0); setBuffered(0); setErr(""); setWaiting(true); setPaused(false); setDescOpen(false);
+    setTime(0); setDuration(0); setBuffered(0); setSeeking(false); setErr(""); setWaiting(true); setPaused(false); setDescOpen(false);
     setVsize({ w: 0, h: 0 });
   }, [playKey]);
 
@@ -487,6 +490,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   onPlaying={() => { setPaused(false); setWaiting(false); }}
                   onPause={() => setPaused(true)}
                   onWaiting={() => setWaiting(true)}
+                  onBuffered={setBuffered}
+                  onSeeking={setSeeking}
                   onEnded={() => { const next = episodes.find((e) => e.ep_num === curEp + 1); if (next) pickEp(next.ep_num); }}
                   onError={(m) => setErr(m)} />
                 </div>
@@ -628,9 +633,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 <div className="absolute inset-0 z-30 flex flex-col items-center justify-center pointer-events-none bg-black/25">
                   <span className="text-[26px] font-bold text-white tabular-nums tsh">{fmtTime(scrub.target)}</span>
                   <span className="text-[11px] text-white/60 mt-1 tabular-nums">/ {fmtTime(duration)}</span>
-                  <div className="mt-4 w-[62%] h-[3px] rounded-full bg-white/25 overflow-hidden">
-                    <div className="h-full bg-white" style={{ width: `${scrub.pct}%` }} />
+                  <div className="relative mt-4 w-[62%] h-[3px] rounded-full bg-white/25 overflow-hidden">
+                    <div className="absolute inset-y-0 left-0 bg-white/35" style={{ width: `${bufProgress * 100}%` }} />
+                    <div className="relative h-full bg-white" style={{ width: `${scrub.pct}%` }} />
                   </div>
+                  <span className="text-[10.5px] text-white/50 mt-2 tabular-nums">已缓冲到 {fmtTime(buffered)}</span>
                 </div>
               )}
 
@@ -642,7 +649,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   </span>
                 </div>
               )}
-              {isActive && waiting && !err && !paused && (
+              {isActive && !err && ((waiting && !paused) || seeking) && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none"><div className="w-9 h-9 spinner" /></div>
               )}
               {isActive && err && (
@@ -662,7 +669,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       {/* 桌面控制条 */}
       {isDesktop && (
         <PlayerControls
-          paused={paused} time={time} duration={duration} buffered={buffered} rate={rate}
+          paused={paused} time={time} duration={duration} buffered={bufProgress} rate={rate}
           muted={muted} volume={volume} theater={theater} fullscreen={fullscreen}
           visible={active && !idle}
           nextDisabled={!episodes.some((e) => e.ep_num === curEp + 1) && index >= videoIds.length - 1}
@@ -713,6 +720,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
           style={{ bottom: fs ? "calc(var(--sab, 0px) + 52px)" : `calc(var(--sab, 0px) + ${bottomInset - 8}px)`, height: 22, touchAction: "none" }}
           onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerCancel={onBarUp}>
           <div className={`absolute inset-x-0 bottom-[6px] transition-all duration-150 ${barPct !== null || fs ? "h-[5px]" : "h-[2.5px]"} bg-white/20`}>
+            {/* 已缓冲：拖到这段以内是秒开，超出要等分片下载 */}
+            <div className="absolute inset-y-0 left-0 bg-white/30" style={{ width: `${bufProgress * 100}%`, transition: "width .25s linear" }} />
             <div className="h-full relative"
               style={{ width: `${barProgress * 100}%`, background: barPct !== null ? "var(--p-primary)" : "rgba(255,255,255,.92)", transition: barPct !== null ? "none" : "width .25s linear" }}>
               <span className="absolute right-[-5px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-white elev-1"
@@ -722,6 +731,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
           {barPct !== null && (
             <div className="absolute left-1/2 -translate-x-1/2 bottom-7 px-3.5 py-1.5 rounded-lg bg-black/70 backdrop-blur-md text-[15px] font-bold text-white tabular-nums">
               {fmtTime(barPct * (duration || 0))} <span className="text-white/45 text-[12px] font-medium">/ {fmtTime(duration)}</span>
+              <div className="text-[10.5px] font-medium text-white/55 text-center mt-0.5">已缓冲到 {fmtTime(buffered)}</div>
             </div>
           )}
         </div>
