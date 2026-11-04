@@ -12,11 +12,31 @@ concurrency:
 
 env:
   CI: "true"
+  # 本次发布要出哪些平台的包（空格分隔：windows android ios）。v1.0.2 只出 iOS。
+  RELEASE_PLATFORMS: ios
 
 jobs:
+  # job 级 if 读不到 env，借一个小任务把平台开关转成 outputs
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      windows: ${{ steps.p.outputs.windows }}
+      android: ${{ steps.p.outputs.android }}
+      ios: ${{ steps.p.outputs.ios }}
+    steps:
+      - id: p
+        run: |
+          for x in windows android ios; do
+            case " $RELEASE_PLATFORMS " in *" $x "*) v=true ;; *) v=false ;; esac
+            echo "$x=$v" | tee -a "$GITHUB_OUTPUT"
+          done
+
   # ================= Windows：NSIS 安装包 + 便携包 =================
   windows:
     name: Windows (setup + portable)
+    needs: plan
+    if: needs.plan.outputs.windows == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +94,8 @@ jobs:
   # ================= Android：按 ABI 分包 + 签名 =================
   android:
     name: Android (split per ABI)
+    needs: plan
+    if: needs.plan.outputs.android == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -173,6 +195,8 @@ jobs:
   # ================= iOS：未签名 IPA（自签 / TrollStore / 爱思等侧载） =================
   ios:
     name: iOS (unsigned ipa)
+    needs: plan
+    if: needs.plan.outputs.ios == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -226,8 +250,20 @@ jobs:
           perl -0pi -e 's/buildSettings = \{/buildSettings = {\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;/g' "$PBX"
           grep -c 'CODE_SIGNING_ALLOWED = NO' "$PBX"
 
+      # 导出 IPA 那一步会因为没签名失败（预期内），只要 xcarchive 里有 .app 就算成功。
+      # 真失败时把报错写成 annotation：Actions 日志要登录才能看，annotation 公开可见。
       - name: 编译并归档
-        run: pnpm tauri ios build --target aarch64 || echo "::notice::导出 IPA 失败（未签名，预期内），改用 xcarchive 里的 .app 打包"
+        run: |
+          pnpm tauri ios build --target aarch64 > build.log 2>&1 || true
+          if ls -d src-tauri/gen/apple/build/*.xcarchive/Products/Applications/*.app >/dev/null 2>&1; then
+            echo "::notice::已归档（导出 IPA 失败属预期，下一步自己打包）"
+            exit 0
+          fi
+          sed -i '' $'s/\x1b\[[0-9;]*m//g' build.log
+          { grep -nE 'error|Error|FAILED|failed|panicked' build.log | grep -v 'warning:' | head -60; echo '----- tail -----'; tail -40 build.log; } > err.txt
+          cat err.txt
+          echo "::error title=tauri ios build 失败::$(tr -d '\r' < err.txt | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+          exit 1
 
       - name: 打包 IPA
         env:
@@ -255,7 +291,8 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [windows, android, ios]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 没选中的平台是 skipped，不能用默认的 success() 判断
+    if: startsWith(github.ref, 'refs/tags/v') && !failure() && !cancelled()
     runs-on: ubuntu-latest
     permissions:
       contents: write
