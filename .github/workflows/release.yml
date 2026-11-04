@@ -260,7 +260,9 @@ jobs:
             exit 0
           fi
           sed -i '' $'s/\x1b\[[0-9;]*m//g' build.log
-          { grep -nE 'error|Error|FAILED|failed|panicked' build.log | grep -v 'warning:' | head -60; echo '----- tail -----'; tail -40 build.log; } > err.txt
+          # 只要真正的报错行（xcodebuild 的命令行里满是 -errors 之类的参数），长行截断
+          { grep -nE '(^|[ :])error(\[E[0-9]+\])?:|\*\* [A-Z ]*FAILED|panicked|^Error|failed to' build.log | head -40
+            echo '----- tail -----'; tail -40 build.log; } | cut -c1-300 > err.txt
           cat err.txt
           echo "::error title=tauri ios build 失败::$(tr -d '\r' < err.txt | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
           exit 1
