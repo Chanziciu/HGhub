@@ -11,9 +11,11 @@
     "app:dev": "tauri dev",
     "app:build": "tauri build",
     "android:init": "tauri android init",
-    "android:icons": "node scripts/sync-android-icons.mjs",
+    "mobile:icons": "node scripts/sync-mobile-icons.mjs",
     "android:dev": "tauri android dev",
-    "android:build": "tauri android build"
+    "android:build": "tauri android build",
+    "ios:init": "tauri ios init",
+    "ios:build": "tauri ios build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",

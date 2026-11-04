@@ -4,7 +4,7 @@
 
 **黄果短剧第三方客户端 · Rust + Tauri 2**
 
-Windows / Android 双端 · Fluent 设计 · 沉浸式竖屏播放
+Windows / Android / iOS 三端 · Fluent 设计 · 沉浸式竖屏播放
 ![alt text](docs/image.png)
 
 </div>
@@ -58,6 +58,17 @@ pnpm android:dev      # 真机 / 模拟器调试
 pnpm android:build    # 产出 APK
 ```
 
+iOS（需 macOS + Xcode、`brew install xcodegen`、`rustup target add aarch64-apple-ios`）：
+
+```bash
+pnpm ios:init         # 首次生成 Xcode 工程（src-tauri/gen/apple）
+pnpm ios:build        # 有开发者证书时直接出签名 IPA
+```
+
+没有证书也能出包：打 tag 后 CI 会产出 **未签名 IPA**（`HGhub_<版本>_ios_unsigned.ipa`，随 Release 发布），
+用 TrollStore 直接装，或用 Sideloadly / AltStore / 爱思助手等自签后安装。做法见 `.github/workflows/release.yml` 的 `ios` 任务：
+工程里关掉签名 → `tauri ios build` 归档 → 从 xcarchive 取 `.app` 打成 `Payload/` 压缩包。
+
 ### 环境注意
 
 - 工程若放在 **exFAT** 盘（不支持符号链接），需保留 `.npmrc` 中的 `node-linker=hoisted`。
@@ -68,7 +79,7 @@ pnpm android:build    # 产出 APK
 1. **统一边缘信封**：站点把 `/api/**` 收敛为 `POST /api/edge/request`（`method/path/body(base64)/content_type` + `Authorization: Bearer`），本项目只对接这一个入口，无需处理 Cookie。
 2. **封面解密**：封面为 AES-128-CBC 密文，Rust 侧解密后经自定义协议输出，前端 `<img>` 直接使用。
 3. **HLS 代理**：m3u8 与分片经自定义协议转发并改写 `#EXT-X-KEY` / 分片地址，绕开 WebView 的 CORS 与防盗链。
-4. **自定义协议**：Windows 为 `http://hg.localhost/*`，Android 为 `https://hg.localhost/*`（由 Rust 侧按平台生成，避免 WebView 无法解析）。
+4. **自定义协议**：Windows / Android 为 `http://hg.localhost/*`，iOS（WKWebView）为 `hg://localhost/*`（Rust 侧 `LOCAL_ORIGIN` 与前端 `LOCAL` 按平台取值，必须一致，否则改写后的分片地址 WebView 解析不了）。
 5. **不做签名逆向**：只复用浏览器同源行为，接口字段均有文档与实测样本。
 
 接口细节见 [docs/API.md](docs/API.md)。

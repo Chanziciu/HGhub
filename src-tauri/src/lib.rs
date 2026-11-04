@@ -6,6 +6,14 @@ mod session;
 use api::Api;
 use tauri::Manager;
 
+/// 自定义协议 hg 在 WebView 里的源：Windows / Android 是 http://<scheme>.localhost，
+/// iOS（WKWebView）是 <scheme>://localhost。播放列表里的分片地址按它改写，必须和前端 api.ts 的 LOCAL 一致。
+/// 注意：不能拿请求 URI 的 scheme 来拼（各平台到这里都是 "hg"），否则 Windows / Android 的 WebView 解析不了。
+#[cfg(target_os = "ios")]
+const LOCAL_ORIGIN: &str = "hg://localhost";
+#[cfg(not(target_os = "ios"))]
+const LOCAL_ORIGIN: &str = "http://hg.localhost";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -22,11 +30,8 @@ pub fn run() {
             let uri = request.uri().clone();
             let path = uri.path().to_string();
             let query = uri.query().unwrap_or("").to_string();
-            // 自定义协议在 Windows 上是 http://<scheme>.localhost，Android 上是 https://
-            // 注意：请求 URI 的 scheme 是 "hg"，不能拿来拼子资源地址，否则 WebView 无法解析。
-            let scheme = "http".to_string();
             tauri::async_runtime::spawn(async move {
-                let resp = media::handle(&path, &query, &scheme).await;
+                let resp = media::handle(&path, &query, LOCAL_ORIGIN).await;
                 responder.respond(resp);
             });
         })

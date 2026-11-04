@@ -170,10 +170,91 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
+  # ================= iOS：未签名 IPA（自签 / TrollStore / 爱思等侧载） =================
+  ios:
+    name: iOS (unsigned ipa)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 版本号对齐 tag
+        id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          node -e "const fs=require('fs');for(const p of ['src-tauri/tauri.conf.json','package.json']){const j=JSON.parse(fs.readFileSync(p));j.version=process.argv[1];fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')}" "$V"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ios
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 准备 Xcode 环境
+        run: |
+          xcodebuild -version
+          command -v xcodegen >/dev/null || brew install xcodegen
+          # tauri ios build 会检查本机有没有 iOS runtime，没有就要交互确认，CI 下会直接报错
+          if ! xcrun simctl list runtimes | grep -q '^iOS'; then
+            xcodebuild -downloadPlatform iOS
+          fi
+
+      - name: 生成 iOS 工程
+        run: pnpm tauri ios init --ci
+
+      # 没有开发者证书：在工程里关掉签名，archive 照常出 .app，最后一步导出 IPA 会因为没签名失败，
+      # 所以下面直接从 xcarchive 里取 .app 自己打包成 IPA（与 xcodebuild -exportArchive 产物结构一致）。
+      - name: 关闭代码签名
+        run: |
+          PBX="$(ls -d src-tauri/gen/apple/*.xcodeproj)/project.pbxproj"
+          perl -0pi -e 's/buildSettings = \{/buildSettings = {\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;/g' "$PBX"
+          grep -c 'CODE_SIGNING_ALLOWED = NO' "$PBX"
+
+      - name: 编译并归档
+        run: pnpm tauri ios build --target aarch64 || echo "::notice::导出 IPA 失败（未签名，预期内），改用 xcarchive 里的 .app 打包"
+
+      - name: 打包 IPA
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          APP="$(find src-tauri/gen/apple -maxdepth 6 -type d -path '*.xcarchive/Products/Applications/*.app' | head -1)"
+          if [ -z "$APP" ]; then echo "::error::没有找到 xcarchive 里的 .app，编译失败"; exit 1; fi
+          echo "app: $APP"
+          BIN="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+          lipo -info "$BIN"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist"
+          mkdir -p ipa/Payload artifacts
+          cp -R "$APP" ipa/Payload/
+          (cd ipa && zip -qry "../artifacts/HGhub_${VERSION}_ios_unsigned.ipa" Payload)
+          ls -lh artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: artifacts/*
+          if-no-files-found: error
+
   # ================= 发布 =================
   release:
     name: Publish GitHub Release
-    needs: [windows, android]
+    needs: [windows, android, ios]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

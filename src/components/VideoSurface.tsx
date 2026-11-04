@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, forwardRef, useState } from "react";
 import Hls from "hls.js";
-import { playlist } from "../api";
+import { LOCAL, playlist } from "../api";
 
 export type VideoHandle = {
   el: () => HTMLVideoElement | null;
@@ -66,7 +66,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     setReady(false);
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
-    const proxied = /^https?:\/\/hg\.localhost\//.test(src);
+    const proxied = src.startsWith(`${LOCAL}/`);
     const url = proxied ? src : playlist(src);
     const useHls = !url.includes("/seg?u=");
 

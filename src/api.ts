@@ -9,11 +9,14 @@ import type {
 export const APP_VERSION = __APP_VERSION__;
 
 export const isAndroid = /Android/i.test(navigator.userAgent);
-export const platform: "android" | "windows" = isAndroid ? "android" : "windows";
+/** iPadOS 的 WKWebView 默认报桌面 UA（Macintosh），靠触点数区分 */
+export const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+  || (/Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+export const platform: "android" | "ios" | "windows" = isAndroid ? "android" : isIOS ? "ios" : "windows";
 
-/** 自定义协议：Windows 与 Android 都是 http://<scheme>.localhost */
-const scheme = "http";
-export const LOCAL = `${scheme}://hg.localhost`;
+/** 自定义协议：Windows 与 Android 是 http://<scheme>.localhost，iOS（WKWebView）是 <scheme>://localhost。
+ *  必须和 src-tauri/src/lib.rs 的 LOCAL_ORIGIN 一致：播放列表里的分片地址按它改写。 */
+export const LOCAL = isIOS ? "hg://localhost" : "http://hg.localhost";
 
 /** 封面：经本地协议解密（站点封面是 AES 密文）。 */
 export const cover = (url?: string, _w = 480) =>

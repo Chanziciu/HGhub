@@ -114,7 +114,9 @@ export default function Player({
     const el = wrapRef.current;
     if (!el) return;
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    else el.requestFullscreen().catch(() => {});
+    else if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+    /* iPhone 的 WKWebView 没有元素级全屏 API，只能让 video 走系统播放器全屏 */
+    else (videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null)?.webkitEnterFullscreen?.();
   };
 
   const pct = duration > 0 ? (time / duration) * 100 : 0;
