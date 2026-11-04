@@ -39,6 +39,22 @@ type Props = {
   className?: string;
 };
 
+/** 当前播放点所在缓冲区间的末尾，没有则 0。
+ *  拖过去的地方前后可能有好几段不连续的缓冲；新下的分片常从关键帧开始，比拖到的位置晚一点，所以往后放宽 1.5 秒 */
+function bufferedEnd(v: HTMLVideoElement) {
+  const b = v.buffered;
+  const t = v.currentTime;
+  for (let i = 0; i < b.length; i++) {
+    if (b.start(i) <= t + 1.5 && b.end(i) > t) return b.end(i);
+  }
+  return 0;
+}
+
+function bufferedAhead(v: HTMLVideoElement) {
+  const end = bufferedEnd(v);
+  return end ? end - v.currentTime : 0;
+}
+
 /** 只负责「播」：hls.js + video 元素，控制条由外层渲染。 */
 const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   { src, poster, autoPlay = true, muted = false, loop = false, fit = "contain", volume = 1, rate = 1,
@@ -84,14 +100,15 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     };
     applySettings();
 
+    let cleanup = () => {};
     if (useHls && Hls.isSupported()) {
-      /* 分片约 5 秒 / 2MB。往前多缓冲一些，往回拖也不必重下；
-         iOS 的 ManagedMediaSource 内存吃紧时系统会自己回收，不用担心撑爆 */
+      /* 分片约 5 秒 / 2MB。缓冲别开太大：iOS 的 ManagedMediaSource 内存一紧就回收，
+         常常只回收视频轨，表现为「有声音、画面不动」。网络上的提速交给 Rust 侧的分片预取 */
       const hls = new Hls({
         enableWorker: true,
-        maxBufferLength: 60,
-        maxMaxBufferLength: 120,
-        backBufferLength: 90,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        backBufferLength: 30,
         manifestLoadingTimeOut: 20000,
         manifestLoadingMaxRetry: 3,
         fragLoadingMaxRetry: 4,
@@ -103,7 +120,33 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
         if (autoPlay) video.play().catch(() => {});
       });
       /* MSE 下 progress 事件不一定触发，分片写进缓冲时主动报一次 */
-      hls.on(Hls.Events.BUFFER_APPENDED, () => reportBuffered(video));
+      let lastLoad = Date.now();
+      hls.on(Hls.Events.BUFFER_APPENDED, () => { lastLoad = Date.now(); reportBuffered(video); });
+      hls.on(Hls.Events.FRAG_LOADING, () => { lastLoad = Date.now(); });
+
+      /* iOS（ManagedMediaSource）：系统发 endstreaming 后 hls.js 会暂停下分片，等系统发 startstreaming 才继续。
+         可拖到没缓冲的地方后系统常常不发，于是一直不下、画面卡住，只有拖回已缓冲处播一会儿才恢复。
+         所以只要当前位置往后缓冲不足，就主动恢复下载；连续 8 秒什么都没下，从当前位置重新起一次加载。 */
+      const kick = () => {
+        const ahead = bufferedAhead(video);
+        if (ahead >= 8) return;
+        if (!hls.bufferingEnabled) hls.resumeBuffering();
+        if (ahead < 0.5 && video.readyState < 3 && Date.now() - lastLoad > 8000) {
+          lastLoad = Date.now();
+          hls.startLoad(video.currentTime);
+        }
+      };
+      const onSeek = () => { lastLoad = Date.now(); kick(); };
+      video.addEventListener("seeking", onSeek);
+      video.addEventListener("waiting", kick);
+      video.addEventListener("stalled", kick);
+      const watchdog = window.setInterval(kick, 1000);
+      cleanup = () => {
+        window.clearInterval(watchdog);
+        video.removeEventListener("seeking", onSeek);
+        video.removeEventListener("waiting", kick);
+        video.removeEventListener("stalled", kick);
+      };
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (!data.fatal) return;
         onError?.(`${data.type}/${data.details}`);
@@ -117,6 +160,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     }
 
     return () => {
+      cleanup();
       if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -132,16 +176,8 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     v.playbackRate = rate;
   };
 
-  /* 只报「当前播放点所在区间」的末尾：拖过去的地方前后可能有好几段不连续的缓冲 */
   const reportBuffered = (v: HTMLVideoElement) => {
-    if (!onBuffered) return;
-    const b = v.buffered;
-    const t = v.currentTime;
-    let end = 0;
-    for (let i = 0; i < b.length; i++) {
-      if (b.start(i) <= t + 0.5 && b.end(i) >= t) { end = b.end(i); break; }
-    }
-    onBuffered(end);
+    onBuffered?.(bufferedEnd(v));
   };
 
   return (

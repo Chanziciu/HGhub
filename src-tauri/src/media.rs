@@ -9,6 +9,7 @@ use aes::Aes128;
 use once_cell::sync::Lazy;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::http::{Response, StatusCode};
 
@@ -208,8 +209,8 @@ type SegCell = Arc<tokio::sync::OnceCell<Result<Seg, String>>>;
 
 /// 分片缓存上限：约 30 片 / 2.5 分钟
 const SEG_CACHE_BYTES: usize = 64 * 1024 * 1024;
-/// 每取一片，往后预取几片（约 15 秒）
-const SEG_PREFETCH: usize = 3;
+/// 每取一片，往后预取几片（约 20 秒）
+const SEG_PREFETCH: usize = 4;
 const SEG_INDEX_MAX: usize = 20_000;
 
 #[derive(Default)]
@@ -222,6 +223,8 @@ struct SegCache {
 
 static SEG_CACHE: Lazy<Mutex<SegCache>> = Lazy::new(|| Mutex::new(SegCache::default()));
 /// 分片地址 → (所在播放列表的分片序列, 下标)，预取时据此找「下一片」
+/// 预取代数：新的预取开始后，旧的就别再往下取了（拖到远处后不跟目标分片抢带宽）
+static PREFETCH_GEN: AtomicU64 = AtomicU64::new(0);
 static SEG_INDEX: Lazy<Mutex<HashMap<String, (Arc<Vec<String>>, usize)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -285,12 +288,13 @@ fn prefetch_after(url: &str) {
             .cloned()
             .collect()
     };
+    let round = PREFETCH_GEN.fetch_add(1, Ordering::Relaxed) + 1;
     if next.is_empty() {
         return;
     }
     tokio::spawn(async move {
         for u in next {
-            if load_segment(&u).await.is_err() {
+            if PREFETCH_GEN.load(Ordering::Relaxed) != round || load_segment(&u).await.is_err() {
                 break;
             }
         }
