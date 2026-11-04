@@ -244,6 +244,23 @@ input[type="range"].hg-range::-webkit-slider-thumb { -webkit-appearance: none; w
   isolation: isolate;
 }
 .plat-android .win-main { background: var(--p-bg); overflow: hidden; }
+
+/* iOS 悬浮底栏：CSS 仿液态玻璃（毛玻璃 + 高光描边）。.is-dark 用在首页视频上，不随主题变浅 */
+.glass-bar {
+  background: rgba(40, 40, 44, .5);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: .5px solid rgba(255, 255, 255, .16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), inset 0 -1px 0 rgba(255, 255, 255, .04), 0 10px 30px rgba(0, 0, 0, .35);
+}
+.glass-bar.is-dark { background: rgba(20, 20, 24, .38); }
+.glass-pill-on { background: rgba(255, 255, 255, .14); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22); }
+html.theme-light .glass-bar:not(.is-dark) {
+  background: rgba(255, 255, 255, .62);
+  border-color: rgba(255, 255, 255, .8);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .95), 0 10px 30px rgba(0, 0, 0, .12);
+}
+html.theme-light .glass-bar:not(.is-dark) .glass-pill-on { background: rgba(0, 0, 0, .06); box-shadow: none; }
 .win-page-in { animation: kf-page-in .26s cubic-bezier(.2,0,0,1) both; }
 .win-page-out { animation: kf-page-out .2s ease-in both; }
 

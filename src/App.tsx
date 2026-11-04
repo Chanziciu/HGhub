@@ -16,20 +16,25 @@ import ResizeHandles from "./components/ResizeHandles";
 import { IGrid, IGridF, IHome, IHomeF, ISearch, IUser, IUserF, Logo } from "./icons";
 
 /* ============ 底部标签栏（Android）—— 细瘦纯文字、低侵入 ============ */
+const TABS: { k: Tab; label: string }[] = [
+  { k: "home", label: "首页" },
+  { k: "search", label: "搜索" },
+  { k: "category", label: "分类" },
+  { k: "profile", label: "我的" },
+];
+
+/** 底栏占高（不含安全区）。Feed 的进度条、侧边按钮按它 + --sab 往上让，改底栏高度要同步改这里。 */
+const TAB_H = { android: 48, ios: 62 } as const;
+
 function TabBar() {
-  const { tab, setTab } = useStore();
-  const items: { k: Tab; label: string }[] = [
-    { k: "home", label: "首页" },
-    { k: "search", label: "搜索" },
-    { k: "category", label: "分类" },
-    { k: "profile", label: "我的" },
-  ];
+  const { tab, setTab, platform } = useStore();
+  if (platform === "ios") return <GlassTabBar />;
   const onVideo = tab === "home";
   return (
     <nav className={`absolute bottom-0 inset-x-0 z-30 ${onVideo ? "" : "bg-s2/95 elev-up"}`}
       style={{ paddingBottom: "var(--sab, 0px)" }}>
       <div className="h-[42px] flex items-center px-1">
-        {items.map(({ k, label }) => {
+        {TABS.map(({ k, label }) => {
           const on = tab === k;
           return (
             <button key={k} onClick={() => setTab(k)} className="flex-1 h-full flex flex-col items-center justify-center pressable">
@@ -40,6 +45,38 @@ function TabBar() {
                 {label}
               </span>
               <span className={`mt-[5px] w-[3px] h-[3px] rounded-full transition-opacity duration-200 ${on ? (onVideo ? "bg-white" : "bg-primary") : "opacity-0"}`} />
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
+/* ============ 底部标签栏（iOS）—— 悬浮胶囊，CSS 仿液态玻璃 ============ */
+const TAB_ICONS: Record<Tab, [typeof IHome, typeof IHome]> = {
+  home: [IHome, IHomeF],
+  search: [ISearch, ISearch],
+  category: [IGrid, IGridF],
+  profile: [IUser, IUserF],
+};
+
+function GlassTabBar() {
+  const { tab, setTab } = useStore();
+  /* 首页是全屏视频，底栏固定用深色玻璃；其他页随主题 */
+  const onVideo = tab === "home";
+  return (
+    <nav className="absolute bottom-0 inset-x-0 z-30 px-5 pointer-events-none" style={{ paddingBottom: "var(--sab, 0px)" }}>
+      <div className={`glass-bar ${onVideo ? "is-dark" : ""} pointer-events-auto h-[54px] p-1 flex items-center rounded-full`}>
+        {TABS.map(({ k, label }) => {
+          const on = tab === k;
+          const [Icon, IconOn] = TAB_ICONS[k];
+          const I = on ? IconOn : Icon;
+          return (
+            <button key={k} onClick={() => setTab(k)} aria-current={on ? "page" : undefined}
+              className={`flex-1 h-full rounded-full flex flex-col items-center justify-center gap-[3px] transition-colors duration-200 pressable ${on ? "glass-pill-on" : ""}`}>
+              <I size={20} className={on ? "text-primary" : onVideo ? "text-white/75" : "text-on/70"} />
+              <span className={`text-[10.5px] leading-none ${on ? "font-semibold text-primary" : onVideo ? "text-white/75" : "text-on/70"}`}>{label}</span>
             </button>
           );
         })}
@@ -103,7 +140,7 @@ function AppBody() {
   const vis = (k: Tab) => (tab === k ? "absolute inset-0" : "absolute inset-0 invisible pointer-events-none");
   const pageActive = stack.length === 0 && !loginOpen;
   const mobile = platform !== "windows";
-  const bottomInset = mobile ? (fs ? 0 : 48) : 14;
+  const bottomInset = mobile ? (fs ? 0 : TAB_H[platform === "ios" ? "ios" : "android"]) : 14;
   /* 栈页（从搜索/分类/我的进入的播放页、图文页）不显示底栏：
      底栏会盖住评论抽屉的输入框，且这些页面本身是沉浸的 */
   const stackInset = mobile ? (fs ? 0 : 20) : 14;

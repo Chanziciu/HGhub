@@ -705,10 +705,12 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         </div>
       )}
 
-      {/* 移动端进度条：22px 热区，可拖动 */}
+      {/* 移动端进度条：22px 热区，可拖动。
+          底栏自带 --sab 的底部留白，进度条也要算上，否则 iPhone（安全区 34px）上会压在底栏上；
+          -8 是把 --sab 的 6px 下限扣掉，安卓位置保持不变 */}
       {!isDesktop && (
         <div ref={barRef} className="absolute inset-x-0 z-30"
-          style={{ bottom: fs ? "calc(var(--sab, 0px) + 52px)" : bottomInset - 2, height: 22, touchAction: "none" }}
+          style={{ bottom: fs ? "calc(var(--sab, 0px) + 52px)" : `calc(var(--sab, 0px) + ${bottomInset - 8}px)`, height: 22, touchAction: "none" }}
           onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerCancel={onBarUp}>
           <div className={`absolute inset-x-0 bottom-[6px] transition-all duration-150 ${barPct !== null || fs ? "h-[5px]" : "h-[2.5px]"} bg-white/20`}>
             <div className="h-full relative"
