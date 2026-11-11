@@ -239,18 +239,32 @@ function MobileShell() {
   const { platform } = useStore();
   useEffect(() => {
     if (platform !== "ios") return;
+    let disposed = false;
     const repair = () => {
-      if (!document.hidden) invoke("repair_mobile_layout").catch(() => {});
+      if (document.hidden) return;
+      invoke<{ width: number; height: number }>("repair_mobile_layout").then((size) => {
+        if (disposed || !(size.width > 0 && size.height > 0)) return;
+        // UIKit points and CSS pixels share the viewport width. Use the actual
+        // native view height rather than WKWebView's shortened percentage height.
+        const cssWidth = document.documentElement.clientWidth || size.width;
+        const height = size.height * cssWidth / size.width;
+        document.documentElement.style.setProperty("--app-height", `${height}px`);
+        invoke("debug_log", { msg: `[layout] native=${size.width}x${size.height} viewport=${innerWidth}x${innerHeight} root=${height}` }).catch(() => {});
+      }).catch(() => {});
     };
     repair();
     const timer = window.setTimeout(repair, 500);
     window.addEventListener("pageshow", repair);
     window.addEventListener("orientationchange", repair);
+    window.addEventListener("resize", repair);
     document.addEventListener("visibilitychange", repair);
     return () => {
+      disposed = true;
+      document.documentElement.style.removeProperty("--app-height");
       window.clearTimeout(timer);
       window.removeEventListener("pageshow", repair);
       window.removeEventListener("orientationchange", repair);
+      window.removeEventListener("resize", repair);
       document.removeEventListener("visibilitychange", repair);
     };
   }, [platform]);

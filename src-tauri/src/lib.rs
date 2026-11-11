@@ -9,12 +9,11 @@ use api::Api;
 use tauri::Manager;
 
 #[tauri::command]
-async fn repair_mobile_layout(window: tauri::WebviewWindow) -> Result<(), String> {
+async fn repair_mobile_layout(window: tauri::WebviewWindow) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "ios")]
-    ios::repair(&window).map_err(|e| e.to_string())?;
+    { return ios::repair(&window).await; }
     #[cfg(not(target_os = "ios"))]
-    let _ = window;
-    Ok(())
+    { let _ = window; Ok(serde_json::Value::Null) }
 }
 
 /// 自定义协议 hg 在 WebView 里的源：Windows / Android 是 http://<scheme>.localhost，

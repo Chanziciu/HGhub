@@ -90,7 +90,7 @@ html.theme-light {
 
 html, body, #root { height: 100%; overflow: hidden; overscroll-behavior: none; }
 html { background: var(--p-canvas); }
-#root { position: fixed; inset: 0; width: 100%; }
+#root { position: fixed; top: 0; left: 0; width: 100%; height: var(--app-height, 100%); }
 button, a, input { touch-action: manipulation; }
 body {
   margin: 0;
