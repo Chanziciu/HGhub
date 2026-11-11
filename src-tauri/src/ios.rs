@@ -38,8 +38,15 @@ pub async fn repair(window: &tauri::WebviewWindow) -> Result<serde_json::Value, 
         let _: () = msg_send![scroll, setDelaysContentTouches: false];
         let bounds: CGRect = msg_send![view, bounds];
         let window_bounds: CGRect = if native_window.is_null() { bounds } else { msg_send![native_window, bounds] };
+        let screen_bounds: CGRect = if native_window.is_null() { bounds } else {
+            let screen: *mut AnyObject = msg_send![native_window, screen];
+            msg_send![screen, bounds]
+        };
+        let frame: CGRect = msg_send![view, frame];
         let _ = sender.send(serde_json::json!({ "width": bounds.size.width, "height": bounds.size.height,
-            "windowWidth": window_bounds.size.width, "windowHeight": window_bounds.size.height }));
+            "windowWidth": window_bounds.size.width, "windowHeight": window_bounds.size.height,
+            "screenWidth": screen_bounds.size.width, "screenHeight": screen_bounds.size.height,
+            "frameX": frame.origin.x, "frameY": frame.origin.y }));
     }).map_err(|e| e.to_string())?;
     receiver.await.map_err(|e| e.to_string())
 }
