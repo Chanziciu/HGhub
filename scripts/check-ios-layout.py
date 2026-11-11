@@ -38,5 +38,11 @@ for model in ['iPhone 11 Pro Max', 'iPhone 16 Pro Max']:
         print(model, json.dumps(m), flush=True)
         assert abs(m['height']-m['windowHeight']) < 1, 'WebView does not fill window'
         assert abs(m['rootHeight']-m['windowHeight']) < 1, 'DOM does not fill window'
+        assert abs(m['windowHeight']-m['screenHeight']) < 1, 'Window does not fill phone screen'
+        # Exercise a background/foreground transition as well as first launch.
+        run('xcrun', 'simctl', 'launch', device, 'com.apple.Preferences')
+        run('xcrun', 'simctl', 'launch', device, 'com.hghub.huangguo', env=env)
+        time.sleep(3)
+        run('xcrun', 'simctl', 'io', device, 'screenshot', str(out/(model+'-resumed.png')))
     finally:
-        subprocess.run(['xcrun','simctl','shutdown',device], check=False)
+        subprocess.run(['xcrun','simctl','shutdown',device], check=False, timeout=60)

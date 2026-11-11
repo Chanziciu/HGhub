@@ -8,6 +8,20 @@ pub async fn repair(window: &tauri::WebviewWindow) -> Result<serde_json::Value, 
         let view = platform.inner().cast::<AnyObject>();
         let parent: *mut AnyObject = msg_send![view, superview];
         let native_window: *mut AnyObject = msg_send![view, window];
+        if !native_window.is_null() {
+            // Read the active scene rather than assuming a device model or subtracting safe areas.
+            let scene: *mut AnyObject = msg_send![native_window, windowScene];
+            let coordinate_space: *mut AnyObject = if scene.is_null() {
+                msg_send![native_window, screen]
+            } else {
+                msg_send![scene, coordinateSpace]
+            };
+            let scene_bounds: CGRect = msg_send![coordinate_space, bounds];
+            let frame: CGRect = msg_send![native_window, frame];
+            if frame != scene_bounds {
+                let _: () = msg_send![native_window, setFrame: scene_bounds];
+            }
+        }
         if !parent.is_null() {
             if !native_window.is_null() {
                 let controller: *mut AnyObject = msg_send![native_window, rootViewController];
@@ -22,12 +36,29 @@ pub async fn repair(window: &tauri::WebviewWindow) -> Result<serde_json::Value, 
                     }
                 }
             }
-            // UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight.
-            let _: () = msg_send![view, setAutoresizingMask: 18usize];
             let bounds: CGRect = msg_send![parent, bounds];
             let frame: CGRect = msg_send![view, frame];
             if frame != bounds {
                 let _: () = msg_send![view, setFrame: bounds];
+            }
+            // Pin to the full content edges, NOT safeAreaLayoutGuide. CSS owns safe-area padding.
+            // Install once; UIKit then tracks resizing without repeated frame arithmetic.
+            let translates: bool = msg_send![view, translatesAutoresizingMaskIntoConstraints];
+            if translates {
+                let _: () = msg_send![view, setTranslatesAutoresizingMaskIntoConstraints: false];
+                macro_rules! pin {
+                    ($anchor:ident) => {{
+                        let child: *mut AnyObject = msg_send![view, $anchor];
+                        let container: *mut AnyObject = msg_send![parent, $anchor];
+                        let constraint: *mut AnyObject = msg_send![child, constraintEqualToAnchor: container];
+                        let _: () = msg_send![constraint, setActive: true];
+                    }};
+                }
+                pin!(leadingAnchor);
+                pin!(trailingAnchor);
+                pin!(topAnchor);
+                pin!(bottomAnchor);
+                let _: () = msg_send![parent, layoutIfNeeded];
             }
         }
         let _: () = msg_send![view, setUserInteractionEnabled: true];

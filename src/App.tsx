@@ -244,10 +244,9 @@ function MobileShell() {
       if (document.hidden) return;
       invoke<{ width: number; height: number; windowWidth: number; windowHeight: number }>("repair_mobile_layout").then((size) => {
         if (disposed || !(size.width > 0 && size.height > 0)) return;
-        // UIKit points and CSS pixels share the viewport width. Use the actual
-        // native view height rather than WKWebView's shortened percentage height.
-        const cssWidth = document.documentElement.clientWidth || size.width;
-        const height = size.height * cssWidth / size.width;
+        // Use the full native window; safe areas are padding inside it, never a height deduction.
+        const cssWidth = window.visualViewport?.width || document.documentElement.clientWidth || size.width;
+        const height = size.windowHeight * cssWidth / size.windowWidth;
         document.documentElement.style.setProperty("--app-height", `${height}px`);
         requestAnimationFrame(() => {
           const root = document.getElementById("root")!.getBoundingClientRect();
