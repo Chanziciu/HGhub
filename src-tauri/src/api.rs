@@ -196,9 +196,14 @@ pub async fn api_video(state: State<'_, Api>, id: i64) -> Result<Value, String> 
 
 #[tauri::command]
 pub async fn api_play(state: State<'_, Api>, id: i64, ep: u32) -> Result<Value, String> {
-    state
-        .get(&format!("/api/videos/{id}/play?ep={ep}&page_texts=0"))
-        .await
+    let token = state.token();
+    let data = edge("POST", &format!("/api/videos/{id}/episodes/{ep}/playback"), Some(json!({})), token.as_deref()).await?;
+    let url = data["streams"]["main"].as_str().filter(|s| !s.is_empty())
+        .ok_or_else(|| "服务器未返回播放地址，请重试或检查登录状态".to_string())?;
+    crate::net::register_cdn(url, &data["cdn"]);
+    if let Some(hevc) = data["streams"]["hevc"].as_str() { crate::net::register_cdn(hevc, &data["cdn"]); }
+    Ok(json!({ "id": id, "ep_num": ep, "video_url": url,
+        "video_url_hevc": data["streams"]["hevc"], "duration": 0, "title": "" }))
 }
 
 /* ───────────────────────── 评论 / 互动 ───────────────────────── */

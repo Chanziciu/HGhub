@@ -24,6 +24,19 @@ use base64::Engine;
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+// Playback credentials stay in memory and are scoped to the CDN origin supplied by the API.
+static CDN_AUTH: Lazy<Mutex<HashMap<String, Value>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+pub fn register_cdn(url: &str, cdn: &Value) {
+    if let Ok(url) = url::Url::parse(url) {
+        let mut entries = CDN_AUTH.lock().unwrap();
+        if entries.len() >= 32 { entries.clear(); }
+        entries.insert(url.origin().ascii_serialization(), cdn.clone());
+    }
+}
 
 pub const BASE: &str = "https://huangguoai.com";
 
@@ -220,10 +233,24 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
     with_retry(|| {
         let url = url.clone();
         async move {
-            let resp = CLIENT
+            let mut request = CLIENT
                 .get(&url)
-                .header("Referer", format!("{BASE}/"))
-                .send()
+                .header("Referer", format!("{BASE}/"));
+            if let Ok(parsed) = url::Url::parse(&url) {
+                let auth = CDN_AUTH.lock().unwrap().get(&parsed.origin().ascii_serialization()).cloned();
+                if let Some(cdn) = auth {
+                    let path = parsed.path().to_ascii_lowercase();
+                    let enabled = if path.ends_with(".m3u8") { "m3u8Enabled" }
+                        else if [".ts", ".m4s", ".key"].iter().any(|ext| path.ends_with(ext)) { "otherEnabled" }
+                        else { "" };
+                    if cdn[enabled].as_bool() == Some(true) {
+                        if let (Some(key), Some(value), Some(app)) = (cdn["authKey"].as_str(), cdn["authValue"].as_str(), cdn["app"].as_str()) {
+                            request = request.header(key, value).header("x-cdn-app", app);
+                        }
+                    }
+                }
+            }
+            let resp = request.send()
                 .await
                 .map_err(|e| err_text(&e))?;
             if !resp.status().is_success() {

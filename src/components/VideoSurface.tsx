@@ -185,6 +185,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       ref={videoRef}
       poster={poster}
       playsInline
+      disableRemotePlayback
       loop={loop}
       onClick={onClick}
       className={`w-full h-full bg-black ${fit === "cover" ? "object-cover" : "object-contain"} ${className}`}
@@ -205,6 +206,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       onWaiting={() => onWaiting?.()}
       onPlaying={() => onPlaying?.()}
       onEnded={() => onEnded?.()}
+      onError={(e) => { const error = e.currentTarget.error; if (error) onError?.(`播放失败（${error.code}）：${error.message || "当前系统无法解码此视频"}`); }}
     />
   );
 });

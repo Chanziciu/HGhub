@@ -53,6 +53,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const [rate, setRate] = useState(1);
   const [waiting, setWaiting] = useState(false);
   const [err, setErr] = useState("");
+  const [retry, setRetry] = useState(0);
+  const [fillScreen, setFillScreen] = useState(false);
   const [panel, setPanel] = useState<"episodes" | "comments" | "article" | null>(null);
   const [descOpen, setDescOpen] = useState(false);
   const theater = store.theater;
@@ -199,7 +201,6 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   /* 拉播放地址 */
   useEffect(() => {
     if (!curId) return;
-    if (playUrls[playKey]) return;
     let alive = true;
     api.play(curId, curEp)
       .then((info) => {
@@ -211,7 +212,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       .catch((e) => { if (alive) setErr((e as Error).message || "取播放地址失败"); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [curId, curEp]);
+  }, [curId, curEp, retry, user]);
 
   /* 切换条目/集数时重置播放状态 */
   useEffect(() => {
@@ -480,14 +481,14 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               {isActive && playUrl ? (
                 <div className="absolute inset-0" style={{ touchAction: "pan-y" }}
                   onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
-                <VideoSurface ref={videoRef} src={playUrl} poster={posterUrl} autoPlay muted={muted}
+                <VideoSurface key={`${playKey}:${retry}`} ref={videoRef} src={playUrl} poster={posterUrl} autoPlay muted={muted}
                   volume={volume} rate={effRate}
-                  fit={isDesktop || (vsize.w > 0 && vsize.w > vsize.h) ? "contain" : "cover"}
+                  fit={!isDesktop && fillScreen ? "cover" : "contain"}
                   onClick={() => { if (isDesktop) videoRef.current?.toggle(); }}
                   onTime={setTime}
                   onDuration={setDuration}
                   onSize={(w, h) => setVsize({ w, h })}
-                  onPlaying={() => { setPaused(false); setWaiting(false); }}
+                  onPlaying={() => { setErr(""); setPaused(false); setWaiting(false); }}
                   onPause={() => setPaused(true)}
                   onWaiting={() => setWaiting(true)}
                   onBuffered={setBuffered}
@@ -537,6 +538,13 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               ) : null}
 
               {/* 右侧操作栏 */}
+              {!isDesktop && isActive && (
+                <button className="absolute right-3 z-30 rounded-full bg-black/60 px-3 py-2 text-xs text-white"
+                  style={{ top: "calc(var(--sat, 0px) + 58px)" }}
+                  onClick={() => setFillScreen((value) => !value)}>
+                  {fillScreen ? "完整画面" : "铺满屏幕"}
+                </button>
+              )}
               {!fs && (
               <div className={`absolute z-20 flex flex-col items-center ${isDesktop ? "desktop-social" : "right-3"}`}
                 style={isDesktop ? undefined : { bottom: `calc(var(--sab, 0px) + ${bottomInset + 104}px)` }}>
@@ -657,7 +665,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   <div className="bg-black/70 rounded-xl p-5 flex flex-col items-center gap-3 text-[13px] text-white/90">
                     <span>视频暂时无法加载</span>
                     <span className="text-[10.5px] text-white/45 max-w-[240px] text-center break-all">{err}</span>
-                    <button className="text-primary text-[12.5px]" onClick={() => { setErr(""); setWaiting(true); videoRef.current?.play(); }}>重试</button>
+                    <button className="text-primary text-[12.5px]" onClick={() => { setErr(""); setWaiting(true); setPlayUrls((urls) => { const next = { ...urls }; delete next[playKey]; return next; }); setRetry((value) => value + 1); }}>重试</button>
                   </div>
                 </div>
               )}
