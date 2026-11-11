@@ -149,10 +149,10 @@ function AppBody() {
     <div className={`absolute inset-0 flex bg-canvas plat-${platform}`}>
       {platform === "windows" && <WindowsRail collapsed={collapsed} />}
       <div ref={mainRef} className="relative flex-1 min-w-0 overflow-hidden win-main">
-        <div className={vis("home")}><Home active={pageActive && tab === "home"} bottomInset={bottomInset} /></div>
-        <div className={vis("search")}><Search active={pageActive && tab === "search"} wide={wide} /></div>
-        <div className={vis("category")}><Category wide={wide} /></div>
-        <div className={vis("profile")}><Profile wide={wide} /></div>
+        {(!mobile || tab === "home") && <div className={vis("home")}><Home active={pageActive && tab === "home"} bottomInset={bottomInset} /></div>}
+        {(!mobile || tab === "search") && <div className={vis("search")}><Search active={pageActive && tab === "search"} wide={wide} /></div>}
+        {(!mobile || tab === "category") && <div className={vis("category")}><Category wide={wide} /></div>}
+        {(!mobile || tab === "profile") && <div className={vis("profile")}><Profile wide={wide} /></div>}
 
         {stack.map((p, i) => (
           <div key={p.key} className="absolute inset-0 z-30 bg-bg a-page-in" style={{ boxShadow: "-18px 0 40px rgba(0,0,0,.5)" }}>
@@ -236,6 +236,24 @@ function ShellInner({ collapsed, theater }: { collapsed: boolean; theater: boole
 
 /* ============ 移动端（无壳） ============ */
 function MobileShell() {
+  const { platform } = useStore();
+  useEffect(() => {
+    if (platform !== "ios") return;
+    const repair = () => {
+      if (!document.hidden) invoke("repair_mobile_layout").catch(() => {});
+    };
+    repair();
+    const timer = window.setTimeout(repair, 500);
+    window.addEventListener("pageshow", repair);
+    window.addEventListener("orientationchange", repair);
+    document.addEventListener("visibilitychange", repair);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pageshow", repair);
+      window.removeEventListener("orientationchange", repair);
+      document.removeEventListener("visibilitychange", repair);
+    };
+  }, [platform]);
   return (
     <div className="absolute inset-0 flex flex-col bg-canvas plat-android"
       style={{ "--sat": "max(env(safe-area-inset-top), 8px)", "--sab": "max(env(safe-area-inset-bottom), 6px)" } as React.CSSProperties}>

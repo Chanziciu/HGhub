@@ -1,0 +1,12 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "HGhub",
+        "backgroundColor": "#1a1a1a",
+        "transparent": false
+      }
+    ]
+  }
+}

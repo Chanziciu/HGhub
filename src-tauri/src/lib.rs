@@ -2,9 +2,20 @@ mod api;
 mod media;
 mod net;
 mod session;
+#[cfg(target_os = "ios")]
+mod ios;
 
 use api::Api;
 use tauri::Manager;
+
+#[tauri::command]
+async fn repair_mobile_layout(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "ios")]
+    ios::repair(&window).map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "ios"))]
+    let _ = window;
+    Ok(())
+}
 
 /// 自定义协议 hg 在 WebView 里的源：Windows / Android 是 http://<scheme>.localhost，
 /// iOS（WKWebView）是 <scheme>://localhost。播放列表里的分片地址按它改写，必须和前端 api.ts 的 LOCAL 一致。
@@ -36,6 +47,7 @@ pub fn run() {
             });
         })
         .invoke_handler(tauri::generate_handler![
+            repair_mobile_layout,
             api::app_boot,
             api::debug_log,
             api::net_diag,

@@ -10,6 +10,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
   const [items, setItems] = useState<VideoCard[]>([]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [done, setDone] = useState(false);
   const loadingRef = useRef(false);
 
@@ -17,6 +18,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
     if (loadingRef.current || done) return;
     loadingRef.current = true;
     setLoading(true);
+    setError("");
     try {
       const res = await api.feed(p, 10);
       const list = res?.items || [];
@@ -27,7 +29,9 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
       setPage(p);
       if (!list.length || (res?.pagination && p >= res.pagination.pages)) setDone(true);
     } catch (e) {
-      toast((e as Error).message || "加载失败", "info");
+      const message = (e as Error).message || "加载失败";
+      setError(message);
+      toast(message, "info");
     } finally {
       loadingRef.current = false;
       setLoading(false);
@@ -44,7 +48,13 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
         <Feed videoIds={ids} mode="home" active={active} bottomInset={bottomInset}
           onNearEnd={() => { if (!loading && !done) load(page + 1); }} />
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center"><div className="w-9 h-9 spinner" /></div>
+        <div className="absolute inset-0 flex flex-col gap-4 items-center justify-center p-8 text-center text-white">
+          {error ? <>
+            <p>暂时无法加载首页</p>
+            <p className="text-xs text-white/65 break-all">{error}</p>
+            <button className="rounded-full bg-primary text-on-primary px-5 py-2" onClick={() => load(1)}>重新加载</button>
+          </> : <><div className="w-9 h-9 spinner" /><p className="text-xs text-white/65">正在加载…</p></>}
+        </div>
       )}
 
       {/* 移动端：静音 + 搜索 */}
