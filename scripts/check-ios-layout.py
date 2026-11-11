@@ -6,7 +6,8 @@ import subprocess
 import time
 
 def run(*args, **kwargs):
-    return subprocess.check_output(args, text=True, **kwargs).strip()
+    print('Running:', ' '.join(map(str, args)), flush=True)
+    return subprocess.check_output(args, text=True, timeout=120, **kwargs).strip()
 
 out = Path('layout-evidence')
 out.mkdir(exist_ok=True)

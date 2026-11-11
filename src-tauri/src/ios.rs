@@ -15,16 +15,20 @@ pub async fn repair(window: &tauri::WebviewWindow) -> Result<serde_json::Value, 
                     let root: *mut AnyObject = msg_send![controller, view];
                     if root == parent {
                         let window_bounds: CGRect = msg_send![native_window, bounds];
-                        let _: () = msg_send![parent, setFrame: window_bounds];
+                        let frame: CGRect = msg_send![parent, frame];
+                        if frame != window_bounds {
+                            let _: () = msg_send![parent, setFrame: window_bounds];
+                        }
                     }
                 }
             }
             // UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight.
             let _: () = msg_send![view, setAutoresizingMask: 18usize];
-            let _: () = msg_send![parent, setNeedsLayout];
-            let _: () = msg_send![parent, layoutIfNeeded];
             let bounds: CGRect = msg_send![parent, bounds];
-            let _: () = msg_send![view, setFrame: bounds];
+            let frame: CGRect = msg_send![view, frame];
+            if frame != bounds {
+                let _: () = msg_send![view, setFrame: bounds];
+            }
         }
         let _: () = msg_send![view, setUserInteractionEnabled: true];
         let scroll: *mut AnyObject = msg_send![view, scrollView];
