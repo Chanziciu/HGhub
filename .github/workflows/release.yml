@@ -12,8 +12,8 @@ concurrency:
 
 env:
   CI: "true"
-  # 本次发布要出哪些平台的包（空格分隔：windows android ios）。目前只出 iOS。
-  RELEASE_PLATFORMS: ios
+  # 本次发布要出哪些平台的包（空格分隔：windows android ios）。
+  RELEASE_PLATFORMS: windows ios
 
 jobs:
   # job 级 if 读不到 env，借一个小任务把平台开关转成 outputs
