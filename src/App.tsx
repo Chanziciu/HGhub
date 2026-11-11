@@ -242,14 +242,17 @@ function MobileShell() {
     let disposed = false;
     const repair = () => {
       if (document.hidden) return;
-      invoke<{ width: number; height: number }>("repair_mobile_layout").then((size) => {
+      invoke<{ width: number; height: number; windowWidth: number; windowHeight: number }>("repair_mobile_layout").then((size) => {
         if (disposed || !(size.width > 0 && size.height > 0)) return;
         // UIKit points and CSS pixels share the viewport width. Use the actual
         // native view height rather than WKWebView's shortened percentage height.
         const cssWidth = document.documentElement.clientWidth || size.width;
         const height = size.height * cssWidth / size.width;
         document.documentElement.style.setProperty("--app-height", `${height}px`);
-        invoke("debug_log", { msg: `[layout] native=${size.width}x${size.height} viewport=${innerWidth}x${innerHeight} root=${height}` }).catch(() => {});
+        requestAnimationFrame(() => {
+          const root = document.getElementById("root")!.getBoundingClientRect();
+          invoke("debug_log", { msg: `[layout] ${JSON.stringify({ ...size, viewportWidth: innerWidth, viewportHeight: innerHeight, rootWidth: root.width, rootHeight: root.height, screenWidth: screen.width, screenHeight: screen.height })}` }).catch(() => {});
+        });
       }).catch(() => {});
     };
     repair();

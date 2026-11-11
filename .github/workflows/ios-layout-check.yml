@@ -1,0 +1,46 @@
+name: iOS layout check
+on: workflow_dispatch
+jobs:
+  simulator:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ios-sim
+      - run: pnpm install --frozen-lockfile
+      - name: Prepare simulator build
+        run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          pnpm tauri ios init --ci
+          PBX="$(ls -d src-tauri/gen/apple/*.xcodeproj)/project.pbxproj"
+          perl -0pi -e 's/buildSettings = \{/buildSettings = {\nCODE_SIGNING_ALLOWED = NO;\nCODE_SIGNING_REQUIRED = NO;/g' "$PBX"
+          for f in "$PBX" src-tauri/gen/apple/project.yml; do
+            sed -i '' 's#$(TOOLCHAIN_DIR)/usr/lib/swift#$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift#g' "$f"
+          done
+      - name: Build simulator app
+        run: |
+          pnpm tauri ios build --target aarch64-sim > simulator-build.log 2>&1 || true
+          find src-tauri/gen/apple -type d -name HGhub.app | tee apps.txt
+          test -s apps.txt || { tail -100 simulator-build.log; exit 1; }
+      - name: Measure both screen sizes
+        run: |
+          python3 scripts/check-ios-layout.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-layout-evidence
+          path: |
+            layout-evidence/
+            simulator-build.log
