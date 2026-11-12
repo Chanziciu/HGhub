@@ -33,6 +33,22 @@ export const playlist = (url: string) => `${LOCAL}/hls?u=${encodeURIComponent(ur
 /** 写一行到应用数据目录 debug.log（用户反馈「打不开」时要的就是它） */
 export const logLine = (msg: string) => invoke("debug_log", { msg }).catch(() => {});
 
+const STARTUP_FEED = "hghub_startup_card_v1";
+/** Show the last opening card immediately while the current feed refreshes. */
+export function startupFeed(): VideoCard[] {
+  if (!isIOS) return [];
+  try {
+    const cached = JSON.parse(localStorage.getItem(STARTUP_FEED) || "null");
+    return cached && cached.expires > Date.now() && Number.isInteger(cached.card?.id) ? [cached.card] : [];
+  } catch { return []; }
+}
+function rememberFeed(result: Paged<VideoCard>) {
+  if (isIOS && result?.items?.[0]) {
+    try { localStorage.setItem(STARTUP_FEED, JSON.stringify({ expires: Date.now() + 6 * 3600_000, card: result.items[0] })); } catch { /* Storage may be full; networking remains available. */ }
+  }
+  return result;
+}
+
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
     return (await invoke(cmd, args)) as T;
@@ -52,10 +68,10 @@ export const api = {
     call<{ user: User }>("api_login", { username, password }),
   register: (username: string, password: string, email = "") =>
     call<{ user: User }>("api_register", { username, password, email }),
-  logout: () => call<{ ok: boolean }>("api_logout"),
+  logout: () => { localStorage.removeItem(STARTUP_FEED); return call<{ ok: boolean }>("api_logout"); },
   me: () => call<User>("api_me"),
 
-  feed: (page = 1, size = 20) => call<Paged<VideoCard>>("api_feed", { page, size }),
+  feed: (page = 1, size = 20) => call<Paged<VideoCard>>("api_feed", { page, size }).then((result) => page === 1 ? rememberFeed(result) : result),
   category: (cate: string, page = 1, size = 20) =>
     call<Paged<VideoCard>>("api_category", { cate, page, size }),
   rank: (kind: "hot" | "recommend" | "potential") =>
@@ -75,7 +91,7 @@ export const api = {
   commentSend: (id: number, ep: number, text: string, replyId?: number) =>
     call<unknown>("api_comment_send", { id, ep, text, replyId: replyId ?? null }),
 
-  clearCache: () => invoke<void>("cache_clear"),
+  clearCache: () => { localStorage.removeItem(STARTUP_FEED); return invoke<void>("cache_clear"); },
   netDiag: () => invoke<Record<string, unknown>>("net_diag"),
   postLike: (id: number, on: boolean) => invoke<unknown>("api_post_like", { id, on }),
   postCollect: (id: number, on: boolean) => invoke<unknown>("api_post_collect", { id, on }),
@@ -160,7 +176,9 @@ export async function mediaPlaybackProbe(config: { id?: number; ep?: number; bas
   const elapsed = () => Math.round(performance.now() - started);
   const Hls = (await import("hls.js")).default;
   await logLine(`[probe] begin baseline=${!!config.baseline}`);
-  await api.feed(1, 10);
+  const warmStartup = !config.baseline && startupFeed().some(card => card.id === (config.id ?? 117));
+  if (warmStartup) api.feed(1, 10).catch(() => {});
+  else await api.feed(1, 10);
   const feedMs = elapsed();
   const info = await api.play(config.id ?? 117, config.ep ?? 3);
   const apiMs = elapsed();
@@ -180,7 +198,7 @@ export async function mediaPlaybackProbe(config: { id?: number; ep?: number; bas
     const finish = (note: string) => {
       if (done) return;
       done = true;
-      const out = JSON.stringify({ note, baseline: !!config.baseline, feedMs, apiMs, firstFrameMs, playingMs, totalMs: elapsed(), stalls, readyState: video.readyState, width: video.videoWidth, height: video.videoHeight, currentTime: video.currentTime, error: video.error?.code ?? 0 });
+      const out = JSON.stringify({ note, baseline: !!config.baseline, warmStartup, feedMs, apiMs, firstFrameMs, playingMs, totalMs: elapsed(), stalls, readyState: video.readyState, width: video.videoWidth, height: video.videoHeight, currentTime: video.currentTime, error: video.error?.code ?? 0 });
       window.clearTimeout(timeout);
       video.pause(); video.removeAttribute("src"); video.load();
       hls?.destroy();

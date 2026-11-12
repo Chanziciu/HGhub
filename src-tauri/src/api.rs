@@ -84,6 +84,8 @@ pub async fn api_login(
         .to_string();
     let user = data.get("user").cloned().unwrap_or(Value::Null);
     state.session.set(token, user.clone());
+    #[cfg(target_os = "ios")]
+    { crate::media::clear_caches(); crate::startup_cache::set_scope(state.session.token()); }
     Ok(json!({ "user": user }))
 }
 
@@ -110,6 +112,8 @@ pub async fn api_register(
         .to_string();
     let user = data.get("user").cloned().unwrap_or(Value::Null);
     state.session.set(token, user.clone());
+    #[cfg(target_os = "ios")]
+    { crate::media::clear_caches(); crate::startup_cache::set_scope(state.session.token()); }
     Ok(json!({ "user": user }))
 }
 
@@ -118,6 +122,8 @@ pub async fn api_logout(state: State<'_, Api>) -> Result<Value, String> {
     let token = state.token();
     let _ = edge("POST", "/api/account/logout", None, token.as_deref()).await;
     state.session.clear();
+    #[cfg(target_os = "ios")]
+    { crate::media::clear_caches(); crate::startup_cache::set_scope(None); }
     Ok(json!({ "ok": true }))
 }
 
@@ -198,9 +204,40 @@ pub async fn api_video(state: State<'_, Api>, id: i64) -> Result<Value, String> 
 pub async fn api_play(app: tauri::AppHandle, state: State<'_, Api>, id: i64, ep: u32) -> Result<Value, String> {
     let started = std::time::Instant::now();
     let token = state.token();
-    let data = edge("POST", &format!("/api/videos/{id}/episodes/{ep}/playback"), Some(json!({})), token.as_deref()).await?;
+    let path = format!("/api/videos/{id}/episodes/{ep}/playback");
+    #[cfg(target_os = "ios")]
+    let cache_key = crate::startup_cache::key(&format!("api:play:{id}:{ep}"));
+    #[cfg(target_os = "ios")]
+    let cached = crate::startup_cache::get(&cache_key).and_then(|(_, bytes)| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(|value| value["streams"]["main"].as_str().is_some_and(|url| !url.is_empty()));
+    #[cfg(not(target_os = "ios"))]
+    let cached: Option<Value> = None;
+    let data = if let Some(cached) = cached {
+        #[cfg(target_os = "ios")]
+        {
+            let path = path.clone(); let token = token.clone(); let cache_key = cache_key.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Ok(fresh) = edge("POST", &path, Some(json!({})), token.as_deref()).await {
+                    if let Some(url) = fresh["streams"]["main"].as_str().filter(|url| !url.is_empty()) {
+                        crate::net::register_cdn(url, &fresh["cdn"]);
+                        if let Ok(bytes) = serde_json::to_vec(&fresh) { crate::startup_cache::put(&cache_key, Some("application/json"), &bytes); }
+                    }
+                }
+            });
+        }
+        cached
+    } else {
+        let data = edge("POST", &path, Some(json!({})), token.as_deref()).await?;
+        #[cfg(target_os = "ios")]
+        if data["streams"]["main"].as_str().is_some_and(|url| !url.is_empty()) {
+            if let Ok(bytes) = serde_json::to_vec(&data) { crate::startup_cache::put(&cache_key, Some("application/json"), &bytes); }
+        }
+        data
+    };
     let url = data["streams"]["main"].as_str().filter(|s| !s.is_empty())
         .ok_or_else(|| "服务器未返回播放地址，请重试或检查登录状态".to_string())?;
+    #[cfg(target_os = "ios")]
+    crate::startup_cache::opening_play(&cache_key);
     crate::net::register_cdn(url, &data["cdn"]);
     if let Some(hevc) = data["streams"]["hevc"].as_str() { crate::net::register_cdn(hevc, &data["cdn"]); }
     #[cfg(target_os = "ios")]

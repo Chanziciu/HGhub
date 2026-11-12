@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Feed from "../components/Feed";
-import { api, platform, APP_VERSION } from "../api";
+import { api, platform, APP_VERSION, startupFeed } from "../api";
 import { invoke } from "@tauri-apps/api/core";
 import type { VideoCard } from "../types";
 import { useStore } from "../store";
@@ -8,7 +8,7 @@ import { ISearch, IVol, IVolMute } from "../icons";
 
 export default function Home({ active, bottomInset }: { active: boolean; bottomInset: number }) {
   const { muted, setMuted, setTab, toast, fs } = useStore();
-  const [items, setItems] = useState<VideoCard[]>([]);
+  const [items, setItems] = useState<VideoCard[]>(startupFeed);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -38,14 +38,14 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
     } catch (e) {
       const message = (e as Error).message || "加载失败";
       setError(message);
-      toast(message, "info");
+      if (!items.length) toast(message, "info");
     } finally {
       loadingRef.current = false;
       setLoading(false);
     }
-  }, [done, toast]);
+  }, [done, toast, items.length]);
 
-  useEffect(() => { if (!items.length) load(1); /* eslint-disable-next-line */ }, []);
+  useEffect(() => { load(1); /* eslint-disable-next-line */ }, []);
 
   const ids = items.map((v) => v.id);
 

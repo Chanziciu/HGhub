@@ -203,6 +203,10 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
     index_segments(&segs);
     cache_put(&PL_CACHE, key, (arc.clone(), segs.clone()), PL_CACHE_MAX);
     #[cfg(target_os = "ios")]
+    if !segs.is_empty() {
+        crate::startup_cache::pin_opening(std::iter::once(url.to_string()).chain(startup.iter().cloned()).chain(segs.iter().take(6).cloned()));
+    }
+    #[cfg(target_os = "ios")]
     if crate::startup_perf::optimized() {
         // AVFoundation otherwise discovers key/map and media only after receiving the manifest.
         // Two initial segments are bounded, and share the normal in-flight segment cache.
@@ -334,6 +338,8 @@ fn prefetch_after(url: &str) {
 
 /// 清空封面 / 播放列表 / 分片内存缓存
 pub fn clear_caches() {
+    #[cfg(target_os = "ios")]
+    crate::startup_cache::clear();
     if let Ok(mut g) = IMG_CACHE.lock() { g.clear(); }
     if let Ok(mut g) = PL_CACHE.lock() { g.clear(); }
     if let Ok(mut g) = SEG_CACHE.lock() { *g = SegCache::default(); }
