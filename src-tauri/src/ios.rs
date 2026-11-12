@@ -87,12 +87,21 @@ pub async fn repair(window: &tauri::WebviewWindow) -> Result<serde_json::Value, 
         }
         let _: () = msg_send![view, setUserInteractionEnabled: true];
         let scroll: *mut AnyObject = msg_send![view, scrollView];
+        let scroll_class = AnyClass::get(c"HGEdgeToEdgeScrollView").unwrap_or_else(|| {
+            let mut builder = ClassBuilder::new(c"HGEdgeToEdgeScrollView", (&*scroll).class()).unwrap();
+            builder.add_method(sel!(safeAreaInsets), full_view_insets as unsafe extern "C-unwind" fn(_, _) -> _);
+            builder.add_method(sel!(adjustedContentInset), full_view_insets as unsafe extern "C-unwind" fn(_, _) -> _);
+            builder.register()
+        });
+        object_setClass(scroll, scroll_class);
         // Safe areas are already handled by CSS; avoid a second native inset.
         let _: () = msg_send![scroll, setContentInsetAdjustmentBehavior: 2isize];
         let _: () = msg_send![scroll, setContentInset: zero];
         let _: () = msg_send![scroll, setScrollIndicatorInsets: zero];
         let _: () = msg_send![scroll, setBounces: false];
         let _: () = msg_send![scroll, setDelaysContentTouches: false];
+        let _: () = msg_send![scroll, setNeedsLayout];
+        let _: () = msg_send![scroll, layoutIfNeeded];
         let bounds: CGRect = msg_send![view, bounds];
         let window_bounds: CGRect = if native_window.is_null() { bounds } else { msg_send![native_window, bounds] };
         let screen_bounds: CGRect = if native_window.is_null() { bounds } else {

@@ -256,20 +256,25 @@ function MobileShell() {
         });
       }).catch(() => {});
     };
-    repair();
-    const timer = window.setTimeout(repair, 500);
-    window.addEventListener("pageshow", repair);
-    window.addEventListener("orientationchange", repair);
-    window.addEventListener("resize", repair);
-    document.addEventListener("visibilitychange", repair);
+    let timers: number[] = [];
+    const schedule = () => {
+      timers.forEach(window.clearTimeout);
+      repair();
+      timers = [window.setTimeout(repair, 300), window.setTimeout(repair, 1200)];
+    };
+    schedule();
+    window.addEventListener("pageshow", schedule);
+    window.addEventListener("orientationchange", schedule);
+    window.addEventListener("resize", schedule);
+    document.addEventListener("visibilitychange", schedule);
     return () => {
       disposed = true;
       document.documentElement.style.removeProperty("--app-height");
-      window.clearTimeout(timer);
-      window.removeEventListener("pageshow", repair);
-      window.removeEventListener("orientationchange", repair);
-      window.removeEventListener("resize", repair);
-      document.removeEventListener("visibilitychange", repair);
+      timers.forEach(window.clearTimeout);
+      window.removeEventListener("pageshow", schedule);
+      window.removeEventListener("orientationchange", schedule);
+      window.removeEventListener("resize", schedule);
+      document.removeEventListener("visibilitychange", schedule);
     };
   }, [platform]);
   return (
