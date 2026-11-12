@@ -4,6 +4,8 @@ mod net;
 mod session;
 #[cfg(target_os = "ios")]
 mod ios;
+#[cfg(target_os = "ios")]
+mod ios_dns;
 
 use api::Api;
 use tauri::Manager;

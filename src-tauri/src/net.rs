@@ -60,6 +60,8 @@ pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .gzip(true)
         .brotli(true)
         .pool_idle_timeout(Duration::from_secs(60));
+    #[cfg(target_os = "ios")]
+    { builder = builder.no_proxy().dns_resolver(std::sync::Arc::new(crate::ios_dns::PublicDns)); }
     if let Some(p) = proxy_override() {
         match reqwest::Proxy::all(&p) {
             Ok(proxy) => builder = builder.proxy(proxy),

@@ -27,7 +27,11 @@ pub async fn repair(window: &tauri::WebviewWindow) -> Result<serde_json::Value, 
             builder.add_method(sel!(safeAreaInsets), full_view_insets as unsafe extern "C-unwind" fn(_, _) -> _);
             builder.register()
         });
-        object_setClass(view, full_class);
+        let previous = object_setClass(view, full_class);
+        if previous != full_class as *const AnyClass {
+            let _: () = msg_send![view, setNeedsLayout];
+            let _: () = msg_send![view, layoutIfNeeded];
+        }
         if !native_window.is_null() {
             // Read the active scene rather than assuming a device model or subtracting safe areas.
             let scene: *mut AnyObject = msg_send![native_window, windowScene];
