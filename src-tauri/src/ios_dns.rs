@@ -46,7 +46,15 @@ impl Resolve for PublicDns {
             };
             let _guard = if crate::startup_perf::optimized() { Some(gate.lock().await) } else { None };
             let started = Instant::now();
-            let hit = CACHE.lock().unwrap().get(&host).filter(|(time,ttl,_)| time.elapsed() < *ttl).map(|(_,_,a)| a.clone());
+            let hit = {
+                let mut cache = CACHE.lock().unwrap();
+                cache.get_mut(&host).filter(|(time, ttl, _)| time.elapsed() < *ttl).map(|(_, _, addrs)| {
+                    // A successful TCP connection can still fail TLS on a CDN edge.
+                    // Let the existing request retry use the next validated address.
+                    if crate::startup_perf::optimized() && addrs.len() > 1 { addrs.rotate_left(1); }
+                    addrs.clone()
+                })
+            };
             if let Some(addrs) = hit { return Ok(Box::new(addrs.into_iter()) as Addrs); }
             let (addrs, ttl) = if crate::startup_perf::optimized() {
                 // Race separately pinned connections: a TCP-success/TLS-failure on one IP
