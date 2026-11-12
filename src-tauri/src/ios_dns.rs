@@ -16,6 +16,22 @@ static FAST_DNS: Lazy<[reqwest::Client; 2]> = Lazy::new(|| ["8.8.4.4:443", "8.8.
 }));
 
 type DnsError = Box<dyn std::error::Error + Send + Sync>;
+pub fn connection_failed(host: &str) {
+    if !crate::startup_perf::optimized() { return; }
+    if let Some((_, _, addrs)) = CACHE.lock().unwrap().get_mut(host) {
+        if addrs.len() > 1 { addrs.rotate_left(1); }
+    }
+}
+
+pub fn connected(response: &reqwest::Response) {
+    if !crate::startup_perf::optimized() { return; }
+    if let (Some(host), Some(remote)) = (response.url().host_str(), response.remote_addr()) {
+        if let Some((_, _, addrs)) = CACHE.lock().unwrap().get_mut(host) {
+            if let Some(index) = addrs.iter().position(|a| a.ip() == remote.ip()) { addrs.swap(0, index); }
+        }
+    }
+}
+
 async fn lookup(client: &reqwest::Client, host: &str) -> Result<(Vec<SocketAddr>, Duration), DnsError> {
     let response: serde_json::Value = client.get("https://dns.google/resolve")
         .query(&[("name", host), ("type", "A")]).send().await?.error_for_status()?.json().await?;
@@ -48,12 +64,7 @@ impl Resolve for PublicDns {
             let started = Instant::now();
             let hit = {
                 let mut cache = CACHE.lock().unwrap();
-                cache.get_mut(&host).filter(|(time, ttl, _)| time.elapsed() < *ttl).map(|(_, _, addrs)| {
-                    // A successful TCP connection can still fail TLS on a CDN edge.
-                    // Let the existing request retry use the next validated address.
-                    if crate::startup_perf::optimized() && addrs.len() > 1 { addrs.rotate_left(1); }
-                    addrs.clone()
-                })
+                cache.get_mut(&host).filter(|(time, ttl, _)| time.elapsed() < *ttl).map(|(_, _, addrs)| addrs.clone())
             };
             if let Some(addrs) = hit { return Ok(Box::new(addrs.into_iter()) as Addrs); }
             let (addrs, ttl) = if crate::startup_perf::optimized() {

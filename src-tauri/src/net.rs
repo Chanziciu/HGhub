@@ -75,6 +75,10 @@ pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
 /// 真正的原因（dns error / connection refused / invalid peer certificate）
 /// 藏在 `source()` 链里。展开成一行，界面和 debug.log 才有排查价值。
 pub fn err_text(e: &reqwest::Error) -> String {
+    #[cfg(target_os = "ios")]
+    if e.is_connect() {
+        if let Some(host) = e.url().and_then(|url| url.host_str()) { crate::ios_dns::connection_failed(host); }
+    }
     let mut out = e.to_string();
     let mut src = std::error::Error::source(e);
     while let Some(s) = src {
@@ -197,6 +201,8 @@ pub async fn edge(
                 }
             }
             let resp = req.send().await.map_err(|e| err_text(&e))?;
+            #[cfg(target_os = "ios")]
+            crate::ios_dns::connected(&resp);
             let status = resp.status();
             let text = resp.text().await.map_err(|e| err_text(&e))?;
             if status.as_u16() == 401 || status.as_u16() == 403 {
@@ -255,6 +261,8 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
             let resp = request.send()
                 .await
                 .map_err(|e| err_text(&e))?;
+            #[cfg(target_os = "ios")]
+            crate::ios_dns::connected(&resp);
             if !resp.status().is_success() {
                 return Err(format!("HTTP {}", resp.status()));
             }
