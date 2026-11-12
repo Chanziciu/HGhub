@@ -1,6 +1,6 @@
 [package]
 name = "huangguo-client"
-version = "1.0.10"
+version = "1.0.11"
 description = "HGhub · 黄果短剧客户端"
 authors = ["HGhub"]
 edition = "2021"
@@ -38,6 +38,7 @@ url = "2"
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6"
 objc2-core-foundation = "0.3"
+objc2-ui-kit = { version = "0.3", default-features = false, features = ["UIGeometry"] }
 
 [profile.release]
 panic = "abort"

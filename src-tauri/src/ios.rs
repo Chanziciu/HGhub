@@ -1,6 +1,15 @@
 //! Keep the iOS WKWebView in its parent's coordinate space, including after resume.
-use objc2::{msg_send, runtime::AnyObject};
+use objc2::{msg_send, sel, runtime::{AnyObject, AnyClass, ClassBuilder, Sel}};
 use objc2_core_foundation::CGRect;
+use objc2_ui_kit::UIEdgeInsets;
+
+unsafe extern "C-unwind" fn full_view_insets(_: &AnyObject, _: Sel) -> UIEdgeInsets {
+    UIEdgeInsets { top: 0.0, left: 0.0, bottom: 0.0, right: 0.0 }
+}
+
+unsafe extern "C" {
+    fn object_setClass(object: *mut AnyObject, class: *const AnyClass) -> *const AnyClass;
+}
 
 pub async fn repair(window: &tauri::WebviewWindow) -> Result<serde_json::Value, String> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -8,6 +17,17 @@ pub async fn repair(window: &tauri::WebviewWindow) -> Result<serde_json::Value, 
         let view = platform.inner().cast::<AnyObject>();
         let parent: *mut AnyObject = msg_send![view, superview];
         let native_window: *mut AnyObject = msg_send![view, window];
+        // Older WKWebView versions shrink their visual viewport by the view's safe
+        // area even with viewport-fit=cover. Keep this app's WebView edge-to-edge;
+        // pass the real window insets separately for the HTML controls.
+        let zero = full_view_insets(&*view, sel!(safeAreaInsets));
+        let safe: UIEdgeInsets = if native_window.is_null() { zero } else { msg_send![native_window, safeAreaInsets] };
+        let full_class = AnyClass::get(c"HGEdgeToEdgeWebView").unwrap_or_else(|| {
+            let mut builder = ClassBuilder::new(c"HGEdgeToEdgeWebView", (&*view).class()).unwrap();
+            builder.add_method(sel!(safeAreaInsets), full_view_insets as unsafe extern "C-unwind" fn(_, _) -> _);
+            builder.register()
+        });
+        object_setClass(view, full_class);
         if !native_window.is_null() {
             // Read the active scene rather than assuming a device model or subtracting safe areas.
             let scene: *mut AnyObject = msg_send![native_window, windowScene];
@@ -65,6 +85,8 @@ pub async fn repair(window: &tauri::WebviewWindow) -> Result<serde_json::Value, 
         let scroll: *mut AnyObject = msg_send![view, scrollView];
         // Safe areas are already handled by CSS; avoid a second native inset.
         let _: () = msg_send![scroll, setContentInsetAdjustmentBehavior: 2isize];
+        let _: () = msg_send![scroll, setContentInset: zero];
+        let _: () = msg_send![scroll, setScrollIndicatorInsets: zero];
         let _: () = msg_send![scroll, setBounces: false];
         let _: () = msg_send![scroll, setDelaysContentTouches: false];
         let bounds: CGRect = msg_send![view, bounds];
@@ -77,7 +99,7 @@ pub async fn repair(window: &tauri::WebviewWindow) -> Result<serde_json::Value, 
         let _ = sender.send(serde_json::json!({ "width": bounds.size.width, "height": bounds.size.height,
             "windowWidth": window_bounds.size.width, "windowHeight": window_bounds.size.height,
             "screenWidth": screen_bounds.size.width, "screenHeight": screen_bounds.size.height,
-            "frameX": frame.origin.x, "frameY": frame.origin.y }));
+            "frameX": frame.origin.x, "frameY": frame.origin.y, "safeTop": safe.top, "safeBottom": safe.bottom }));
     }).map_err(|e| e.to_string())?;
     receiver.await.map_err(|e| e.to_string())
 }

@@ -242,12 +242,14 @@ function MobileShell() {
     let disposed = false;
     const repair = () => {
       if (document.hidden) return;
-      invoke<{ width: number; height: number; windowWidth: number; windowHeight: number }>("repair_mobile_layout").then((size) => {
+      invoke<{ width: number; height: number; windowWidth: number; windowHeight: number; safeTop: number; safeBottom: number }>("repair_mobile_layout").then((size) => {
         if (disposed || !(size.width > 0 && size.height > 0)) return;
         // Use the full native window; safe areas are padding inside it, never a height deduction.
         const cssWidth = window.visualViewport?.width || document.documentElement.clientWidth || size.width;
         const height = size.windowHeight * cssWidth / size.windowWidth;
         document.documentElement.style.setProperty("--app-height", `${height}px`);
+        document.documentElement.style.setProperty("--native-safe-top", `${size.safeTop}px`);
+        document.documentElement.style.setProperty("--native-safe-bottom", `${size.safeBottom}px`);
         requestAnimationFrame(() => {
           const root = document.getElementById("root")!.getBoundingClientRect();
           invoke("debug_log", { msg: `[layout] ${JSON.stringify({ ...size, viewportWidth: innerWidth, viewportHeight: innerHeight, rootWidth: root.width, rootHeight: root.height, screenWidth: screen.width, screenHeight: screen.height })}` }).catch(() => {});
@@ -272,7 +274,7 @@ function MobileShell() {
   }, [platform]);
   return (
     <div className="absolute inset-0 flex flex-col bg-canvas plat-android"
-      style={{ "--sat": "max(env(safe-area-inset-top), 8px)", "--sab": "max(env(safe-area-inset-bottom), 6px)" } as React.CSSProperties}>
+      style={{ "--sat": "max(var(--native-safe-top, env(safe-area-inset-top)), 8px)", "--sab": "max(var(--native-safe-bottom, env(safe-area-inset-bottom)), 6px)" } as React.CSSProperties}>
       <div className="relative flex-1 min-h-0">
         <AppBody />
       </div>
