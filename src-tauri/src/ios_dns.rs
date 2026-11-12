@@ -9,10 +9,14 @@ static DNS: Lazy<reqwest::Client> = Lazy::new(|| reqwest::Client::builder()
     .no_proxy().timeout(Duration::from_secs(8))
     .resolve_to_addrs("dns.google", &["8.8.8.8:443".parse().unwrap(), "8.8.4.4:443".parse().unwrap()])
     .build().expect("DNS client"));
-static FAST_DNS: Lazy<[reqwest::Client; 2]> = Lazy::new(|| ["8.8.4.4:443", "8.8.8.8:443"].map(|address| {
-    reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(6))
+static FAST_DNS: Lazy<[(reqwest::Client, &'static str); 3]> = Lazy::new(|| [
+    ("dns.google", "8.8.4.4:443", "https://dns.google/resolve"),
+    ("cloudflare-dns.com", "1.0.0.1:443", "https://cloudflare-dns.com/dns-query"),
+    ("dns.google", "8.8.8.8:443", "https://dns.google/resolve"),
+].map(|(host, address, endpoint)| {
+    (reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(6))
         .connect_timeout(Duration::from_secs(3))
-        .resolve("dns.google", address.parse().unwrap()).build().expect("DNS client")
+        .resolve(host, address.parse().unwrap()).build().expect("DNS client"), endpoint)
 }));
 
 type DnsError = Box<dyn std::error::Error + Send + Sync>;
@@ -32,8 +36,8 @@ pub fn connected(response: &reqwest::Response) {
     }
 }
 
-async fn lookup(client: &reqwest::Client, host: &str) -> Result<(Vec<SocketAddr>, Duration), DnsError> {
-    let response: serde_json::Value = client.get("https://dns.google/resolve")
+async fn lookup(client: &reqwest::Client, host: &str, endpoint: &str) -> Result<(Vec<SocketAddr>, Duration), DnsError> {
+    let response: serde_json::Value = client.get(endpoint).header("Accept", "application/dns-json")
         .query(&[("name", host), ("type", "A")]).send().await?.error_for_status()?.json().await?;
     let answers: Vec<_> = response["Answer"].as_array().into_iter().flatten()
         .filter(|answer| answer["type"].as_u64() == Some(1)).collect();
@@ -70,14 +74,22 @@ impl Resolve for PublicDns {
             let (addrs, ttl) = if crate::startup_perf::optimized() {
                 // Race separately pinned connections: a TCP-success/TLS-failure on one IP
                 // does not make reqwest try the other address in a single resolver result.
-                let a = lookup(&FAST_DNS[0], &host);
-                let b = lookup(&FAST_DNS[1], &host);
-                tokio::pin!(a, b);
-                tokio::select! {
-                    result = &mut a => match result { Ok(value) => value, Err(_) => b.await? },
-                    result = &mut b => match result { Ok(value) => value, Err(_) => a.await? },
+                let mut tasks = tokio::task::JoinSet::new();
+                for (client, endpoint) in FAST_DNS.iter() {
+                    let host = host.clone();
+                    tasks.spawn(async move { lookup(client, &host, endpoint).await });
                 }
-            } else { lookup(&DNS, &host).await? };
+                let mut selected = None;
+                let mut error: Option<DnsError> = None;
+                while let Some(result) = tasks.join_next().await {
+                    match result {
+                        Ok(Ok(value)) => { selected = Some(value); tasks.abort_all(); break; },
+                        Ok(Err(reason)) => error = Some(reason),
+                        Err(reason) => error = Some(Box::new(reason)),
+                    }
+                }
+                selected.ok_or_else(|| error.unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "DNS unavailable").into()))?
+            } else { lookup(&DNS, &host, "https://dns.google/resolve").await? };
             { let mut cache = CACHE.lock().unwrap(); if cache.len() > 256 { cache.clear(); } cache.insert(host, (Instant::now(), ttl, addrs.clone())); }
             crate::startup_perf::log(&format!("dns ms={}", started.elapsed().as_millis()));
             Ok(Box::new(addrs.into_iter()) as Addrs)
