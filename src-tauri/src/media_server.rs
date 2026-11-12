@@ -36,11 +36,13 @@ pub fn start() -> std::io::Result<String> {
                     let Some(target) = first[1].strip_prefix(&format!("/{token}")) else { return Ok(()); };
                     let (path, query) = target.split_once('?').unwrap_or((target, ""));
                     if !["/hls", "/seg", "/img"].contains(&path) { return Ok(()); }
+                    let started = std::time::Instant::now();
                     let response = crate::media::handle(path, query, &origin).await;
                     let kind = response.headers().get("Content-Type").and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
                     let mut status = response.status().as_u16();
                     let body = response.into_body();
                     let total = body.len();
+                    if path != "/img" { crate::startup_perf::log(&format!("local {method} {path} ms={} bytes={total} status={status}", started.elapsed().as_millis())); }
                     let mut start = 0;
                     let mut end = total;
                     let mut content_range = String::new();

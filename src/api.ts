@@ -155,31 +155,50 @@ export const dur = (s?: number | string) => {
 };
 
 /** 真实解码探针：用 hls.js 挂一个隐藏 video，回报 readyState / 尺寸 / 进度。 */
-export async function mediaPlaybackProbe(): Promise<string> {
+export async function mediaPlaybackProbe(config: { id?: number; ep?: number; baseline?: boolean } = {}): Promise<string> {
+  const started = performance.now();
+  const elapsed = () => Math.round(performance.now() - started);
   const Hls = (await import("hls.js")).default;
-  const info = await api.play(117, 3);
+  await logLine(`[probe] begin baseline=${!!config.baseline}`);
+  await api.feed(1, 10);
+  const feedMs = elapsed();
+  const info = await api.play(config.id ?? 117, config.ep ?? 3);
+  const apiMs = elapsed();
   const src = playlist(info.video_url);
   const video = document.createElement("video");
   video.muted = true;
   video.playsInline = true;
-  video.style.cssText = "position:fixed;left:-10px;top:-10px;width:2px;height:2px;opacity:0;pointer-events:none";
+    video.style.cssText = "position:fixed;left:0;top:0;width:100%;height:100%;object-fit:contain;pointer-events:none;background:black";
   document.body.appendChild(video);
   return await new Promise<string>((resolve) => {
     let done = false;
+    let firstFrameMs = 0;
+    let playingMs = 0;
+    let stalls = 0;
+    let hls: InstanceType<typeof Hls> | undefined;
+    let timeout = 0;
     const finish = (note: string) => {
       if (done) return;
       done = true;
-      const out = `${note} rs=${video.readyState} w=${video.videoWidth} h=${video.videoHeight} t=${video.currentTime.toFixed(2)} err=${video.error?.code ?? 0}`;
-      try { hls.destroy(); } catch { /* ignore */ }
+      const out = JSON.stringify({ note, baseline: !!config.baseline, feedMs, apiMs, firstFrameMs, playingMs, totalMs: elapsed(), stalls, readyState: video.readyState, width: video.videoWidth, height: video.videoHeight, currentTime: video.currentTime, error: video.error?.code ?? 0 });
+      window.clearTimeout(timeout);
+      video.pause(); video.removeAttribute("src"); video.load();
+      hls?.destroy();
       video.remove();
       resolve(out);
     };
-    const hls = new Hls({ enableWorker: false });
-    hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) finish(`fatal:${d.details}`); });
-    hls.loadSource(src);
-    hls.attachMedia(video);
+    video.addEventListener("loadeddata", () => { firstFrameMs ||= elapsed(); });
+    video.addEventListener("playing", () => { playingMs ||= elapsed(); });
+    video.addEventListener("waiting", () => { if (playingMs) stalls++; });
+    video.addEventListener("timeupdate", () => { if (video.currentTime >= 10) finish("played_10s"); });
+    video.addEventListener("error", () => finish("video_error"));
+    if (Hls.isSupported()) {
+      hls = new Hls({ enableWorker: true, maxBufferLength: 30, maxMaxBufferLength: 60, backBufferLength: 30 });
+      hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) finish(`fatal:${d.details}`); });
+      hls.loadSource(src); hls.attachMedia(video);
+    } else video.src = src;
     video.play().catch(() => {});
-    window.setTimeout(() => finish("timeout"), 9000);
+    timeout = window.setTimeout(() => finish("timeout"), 90000);
   });
 }
 /** 非 m3u8 媒体（mp4 等）走 /seg 原样透传 */
