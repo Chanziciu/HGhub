@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { api, cover, fmt, fmtTime, mediaUrl, platform } from "../api";
 import type { Detail, Episode, Post, VideoCard } from "../types";
 import { useStore } from "../store";
@@ -199,6 +200,16 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   }, [kind, index, videoIds]);
 
   /* 拉播放地址 */
+  useEffect(() => {
+    if (platform !== "ios") return;
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    listen<{ id: number; ep_num: number; video_url: string }>("playback-refreshed", ({ payload }) => {
+      if (payload.id === curId && payload.ep_num === curEp) setPlayUrls((urls) => ({ ...urls, [playKey]: payload.video_url }));
+    }).then((unlisten) => { if (disposed) unlisten(); else stop = unlisten; }).catch(() => {});
+    return () => { disposed = true; stop?.(); };
+  }, [curId, curEp, playKey]);
+
   useEffect(() => {
     if (!curId) return;
     let alive = true;
@@ -482,6 +493,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 <div className="absolute inset-0" style={{ touchAction: "pan-y" }}
                   onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
                 <VideoSurface key={`${playKey}:${retry}`} ref={videoRef} src={playUrl} poster={posterUrl} autoPlay muted={muted}
+                  preservePositionOnSourceChange={platform === "ios"}
                   volume={volume} rate={effRate}
                   fit={!isDesktop && fillScreen ? "cover" : "contain"}
                   onClick={() => { if (isDesktop) videoRef.current?.toggle(); }}

@@ -232,6 +232,51 @@ fn absolutize_uri_in_attr(base: &str, line: &str) -> String {
     line.to_string()
 }
 
+/// Prepare a new signed playback URL completely before publishing it as the next startup snapshot.
+#[cfg(target_os = "ios")]
+pub async fn prepare_opening(url: &str, prefix: &str) -> Result<Vec<String>, String> {
+    let original = url.to_string();
+    let mut current = original.clone();
+    let mut resources = vec![original];
+    let mut segments = Vec::new();
+    let mut keys = Vec::new();
+    for _ in 0..3 {
+        let text = load_playlist(&current, prefix).await?;
+        segments = PL_CACHE.lock().unwrap().get(&format!("{prefix}\n{current}")).map(|(_, segs)| segs.iter().take(6).cloned().collect()).unwrap_or_default();
+        if !segments.is_empty() {
+            if !text.contains("#EXT-X-ENDLIST") { return Err("Live playlists are not startup snapshots".into()); }
+            for line in text.lines().filter(|line| line.starts_with("#EXT-X-KEY") || line.starts_with("#EXT-X-MAP")) {
+                if let Some(uri) = line.split("URI=\"").nth(1).and_then(|s| s.split('"').next()) {
+                    if let Ok(uri) = url::Url::parse(uri) {
+                        if let Some((_, target)) = uri.query_pairs().find(|(key, _)| key == "u") { keys.push(target.into_owned()); }
+                    }
+                }
+                if keys.len() >= 4 { break; }
+            }
+            break;
+        }
+        let next = text.lines().find(|line| !line.is_empty() && !line.starts_with('#')).ok_or("Empty playback playlist")?;
+        current = url::Url::parse(next).ok().and_then(|uri| uri.query_pairs().find(|(key, _)| key == "u").map(|(_, value)| value.into_owned())).ok_or("Invalid child playlist")?;
+        resources.push(current.clone());
+    }
+    if segments.is_empty() { return Err("No VOD fragments".into()); }
+    resources.extend(keys); resources.extend(segments);
+    let slots = Arc::new(tokio::sync::Semaphore::new(2));
+    let mut downloads = tokio::task::JoinSet::new();
+    for resource in resources.iter().filter(|resource| resource.as_str() != current.as_str() && resource.as_str() != url).cloned() {
+        let slots = slots.clone();
+        let disk_key = crate::startup_cache::key(&resource);
+        downloads.spawn(async move {
+            let _permit = slots.acquire_owned().await.map_err(|e| e.to_string())?;
+            let (kind, bytes) = load_segment(&resource).await?;
+            crate::startup_cache::put(&disk_key, kind.as_deref(), &bytes);
+            Ok::<(), String>(())
+        });
+    }
+    while let Some(result) = downloads.join_next().await { result.map_err(|e| e.to_string())??; }
+    Ok(resources)
+}
+
 /* ───────────────────────── 分片缓存 + 预取 ─────────────────────────
  * 分片约 5 秒 / 2MB，以前每次都现下：拖进度到没缓冲的地方，要等整片从上游下完才出画面。
  * 现在：同一分片并发请求只下一次（hls.js 取消重发、预取撞车都会合并），
