@@ -25,6 +25,7 @@ pub fn init(dir: PathBuf, token: Option<String>) {
 }
 pub fn set_scope(token: Option<String>) { STORE.lock().unwrap().scope = hash(token.as_deref().unwrap_or("anonymous")); }
 pub fn key(resource: &str) -> String { format!("{}:{resource}", STORE.lock().unwrap().scope) }
+pub fn current_scope(key: &str) -> bool { key.starts_with(&format!("{}:", STORE.lock().unwrap().scope)) }
 
 pub fn get(key: &str) -> Option<(Option<String>, Vec<u8>)> {
     if !crate::startup_perf::optimized() { return None; }
@@ -71,6 +72,37 @@ pub fn put(key: &str, content_type: Option<&str>, bytes: &[u8]) {
 pub fn opening_play(key: &str) {
     let mut store = STORE.lock().unwrap();
     if store.opening_api.is_none() { store.opening_api = Some(name(key)); }
+}
+
+/// A cached API response is useful only when its matching opening assets are still present.
+pub fn opening_ready(api_key: &str, url: &str) -> bool {
+    use std::io::Read;
+    if !crate::startup_perf::optimized() { return false; }
+    let store = STORE.lock().unwrap();
+    let Some(dir) = &store.dir else { return false };
+    let manifest = name(&format!("{}:{url}", store.scope));
+    if store.opening_api.is_some() { return dir.join(manifest).is_file(); }
+    if !store.pins.contains(&name(api_key)) || !store.pins.contains(&manifest) { return false; }
+    store.pins.iter().all(|file| {
+        let Ok(mut handle) = std::fs::File::open(dir.join(file)) else { return false };
+        let mut size = [0u8; 4];
+        if handle.read_exact(&mut size).is_err() { return false; }
+        let length = u32::from_le_bytes(size) as usize;
+        if length > 32768 { return false; }
+        let mut bytes = vec![0u8; length];
+        handle.read_exact(&mut bytes).is_ok() && serde_json::from_slice::<Header>(&bytes).is_ok_and(|header| header.expires > now())
+    })
+}
+
+pub fn refresh_opening(api_key: &str, resources: Vec<String>) {
+    let mut store = STORE.lock().unwrap();
+    if store.opening_api.as_deref() != Some(name(api_key).as_str()) { return; }
+    let scope = store.scope.clone();
+    store.pins = resources.into_iter().map(|url| name(&format!("{scope}:{url}"))).collect();
+    store.pins.insert(name(api_key));
+    if let Some(dir) = &store.dir {
+        if let Ok(bytes) = serde_json::to_vec(&store.pins) { let _ = std::fs::write(dir.join("pins.json"), bytes); }
+    }
 }
 
 pub fn pin_opening(resources: impl IntoIterator<Item = String>) {

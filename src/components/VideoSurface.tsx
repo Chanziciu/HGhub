@@ -17,6 +17,7 @@ type Props = {
   src: string;
   poster?: string;
   autoPlay?: boolean;
+  preservePositionOnSourceChange?: boolean;
   muted?: boolean;
   loop?: boolean;
   fit?: "contain" | "cover";
@@ -57,13 +58,14 @@ function bufferedAhead(v: HTMLVideoElement) {
 
 /** 只负责「播」：hls.js + video 元素，控制条由外层渲染。 */
 const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
-  { src, poster, autoPlay = true, muted = false, loop = false, fit = "contain", volume = 1, rate = 1,
+  { src, poster, autoPlay = true, preservePositionOnSourceChange = false, muted = false, loop = false, fit = "contain", volume = 1, rate = 1,
     onTime, onDuration, onSize, onPlaying, onPause, onWaiting, onBuffered, onSeeking, onEnded, onError, onClick, className = "" },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const sourceStarted = useRef(0);
   const firstFrameLogged = useRef(false);
+  const previousSource = useRef("");
   const hlsRef = useRef<Hls | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -85,6 +87,17 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
+    const resumeAt = preservePositionOnSourceChange && previousSource.current ? video.currentTime : 0;
+    const shouldPlay = autoPlay && !(preservePositionOnSourceChange && previousSource.current && video.paused);
+    previousSource.current = src;
+    const restorePosition = () => {
+      if (resumeAt > 0 && Number.isFinite(resumeAt)) {
+        video.currentTime = Math.min(resumeAt, Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.1) : resumeAt);
+        logLine(`[perf] refreshed_stream_resume seconds=${resumeAt.toFixed(2)}`);
+        if (shouldPlay) video.play().catch(() => {});
+      }
+    };
+    video.addEventListener("loadedmetadata", restorePosition, { once: true });
     sourceStarted.current = performance.now();
     firstFrameLogged.current = false;
     setReady(false);
@@ -121,7 +134,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (autoPlay) video.play().catch(() => {});
+        if (shouldPlay) video.play().catch(() => {});
       });
       /* MSE 下 progress 事件不一定触发，分片写进缓冲时主动报一次 */
       let lastLoad = Date.now();
@@ -160,10 +173,11 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       });
     } else {
       video.src = url;
-      if (autoPlay) video.play().catch(() => {});
+      if (shouldPlay) video.play().catch(() => {});
     }
 
     return () => {
+      video.removeEventListener("loadedmetadata", restorePosition);
       cleanup();
       if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     };
