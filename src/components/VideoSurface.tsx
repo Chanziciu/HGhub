@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, forwardRef, useState } from "react";
 import Hls from "hls.js";
-import { LOCAL, playlist } from "../api";
+import { LOCAL, playlist, logLine } from "../api";
 
 export type VideoHandle = {
   el: () => HTMLVideoElement | null;
@@ -62,6 +62,8 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const sourceStarted = useRef(0);
+  const firstFrameLogged = useRef(false);
   const hlsRef = useRef<Hls | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -83,6 +85,8 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
+    sourceStarted.current = performance.now();
+    firstFrameLogged.current = false;
     setReady(false);
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
@@ -185,12 +189,19 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       ref={videoRef}
       poster={poster}
       playsInline
+      preload="auto"
       disableRemotePlayback
       loop={loop}
       onClick={onClick}
       className={`w-full h-full bg-black ${fit === "cover" ? "object-cover" : "object-contain"} ${className}`}
       style={{ opacity: ready ? 1 : 0, transition: "opacity .35s" }}
-      onLoadedData={(e) => { setReady(true); reapply(e.target as HTMLVideoElement); }}
+      onLoadedData={(e) => {
+        setReady(true); reapply(e.target as HTMLVideoElement);
+        if (!firstFrameLogged.current) {
+          firstFrameLogged.current = true;
+          logLine(`[perf] video_first_frame ms=${Math.round(performance.now() - sourceStarted.current)}`);
+        }
+      }}
       onTimeUpdate={(e) => { const v = e.target as HTMLVideoElement; onTime?.(v.currentTime); reportBuffered(v); }}
       onProgress={(e) => reportBuffered(e.target as HTMLVideoElement)}
       onSeeking={(e) => { onSeeking?.(true); reportBuffered(e.target as HTMLVideoElement); }}

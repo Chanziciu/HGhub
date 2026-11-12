@@ -2,6 +2,7 @@ mod api;
 mod media;
 mod net;
 mod session;
+mod startup_perf;
 #[cfg(target_os = "ios")]
 mod ios;
 #[cfg(target_os = "ios")]
@@ -45,6 +46,7 @@ pub fn run() {
             app.manage(media_server::MediaOrigin(media_server::start()?));
             if let Ok(dir) = app.path().app_data_dir() {
                 let _ = std::fs::create_dir_all(&dir);
+                startup_perf::init(&dir);
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
             }
@@ -61,6 +63,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             media_origin,
+            startup_perf::media_probe_config,
             repair_mobile_layout,
             api::app_boot,
             api::debug_log,

@@ -21,6 +21,8 @@ static IMG_CACHE: Lazy<Mutex<HashMap<String, Arc<Vec<u8>>>>> =
 /// 播放列表 → (改写后的文本, 原始分片地址序列)
 static PL_CACHE: Lazy<Mutex<HashMap<String, (Arc<String>, Arc<Vec<String>>)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static PL_LOADING: Lazy<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 const IMG_CACHE_MAX: usize = 240;
 const PL_CACHE_MAX: usize = 60;
@@ -143,16 +145,26 @@ fn rewrite_uri_attr(line: &str, prefix: &str) -> String {
 
 /// 取 m3u8 并把 key / 分片地址改写到本地协议。
 pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, String> {
-    if let Some((text, segs)) = PL_CACHE.lock().unwrap().get(url).cloned() {
+    let key = format!("{prefix}\n{url}");
+    let gate = {
+        let mut loading = PL_LOADING.lock().unwrap();
+        if loading.len() >= PL_CACHE_MAX * 2 { loading.retain(|_, gate| Arc::strong_count(gate) > 1); }
+        loading.entry(key.clone()).or_default().clone()
+    };
+    let _guard = gate.lock().await;
+    if let Some((text, segs)) = PL_CACHE.lock().unwrap().get(&key).cloned() {
         index_segments(&segs);
         return Ok(text);
     }
+    let started = std::time::Instant::now();
     let (_, bytes) = fetch_bytes(url).await?;
     let text = String::from_utf8_lossy(&bytes).to_string();
 
     let mut out = String::with_capacity(text.len() + 512);
     let mut segs = Vec::new();
     let mut after_inf = false;
+    let mut startup = Vec::new();
+    let mut variant = false;
     for raw in text.lines() {
         let line = raw.trim_end();
         if line.is_empty() {
@@ -161,21 +173,27 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
         }
         if line.starts_with('#') {
             after_inf |= line.starts_with("#EXTINF");
+            variant = line.starts_with("#EXT-X-STREAM-INF");
             if line.starts_with("#EXT-X-KEY") || line.starts_with("#EXT-X-MAP") {
                 // 先把相对 URI 绝对化再改写
                 let absolute = absolutize_uri_in_attr(url, line);
+                if let Some(rest) = absolute.split("URI=\"").nth(1) {
+                    if let Some(uri) = rest.split('"').next() { if startup.len() < 4 { startup.push(uri.to_string()); } }
+                }
                 out.push_str(&rewrite_uri_attr(&absolute, prefix));
             } else {
                 out.push_str(line);
             }
         } else {
             let absolute = absolutize(url, line);
-            out.push_str(&format!("{prefix}/seg?u={}", enc(&absolute)));
+            let route = if variant { "hls" } else { "seg" };
+            out.push_str(&format!("{prefix}/{route}?u={}", enc(&absolute)));
             // 只记 #EXTINF 后面的媒体分片；master 列表里的子列表不预取
             if after_inf {
                 segs.push(absolute);
             }
             after_inf = false;
+            variant = false;
         }
         out.push('\n');
     }
@@ -183,7 +201,18 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
     let arc = Arc::new(out);
     let segs = Arc::new(segs);
     index_segments(&segs);
-    cache_put(&PL_CACHE, url.to_string(), (arc.clone(), segs), PL_CACHE_MAX);
+    cache_put(&PL_CACHE, key, (arc.clone(), segs.clone()), PL_CACHE_MAX);
+    #[cfg(target_os = "ios")]
+    if crate::startup_perf::optimized() {
+        // AVFoundation otherwise discovers key/map and media only after receiving the manifest.
+        // Two initial segments are bounded, and share the normal in-flight segment cache.
+        startup.extend(segs.iter().take(2).cloned());
+        startup.sort(); startup.dedup();
+        for item in startup {
+            tauri::async_runtime::spawn(async move { let _ = load_segment(&item).await; });
+        }
+    }
+    crate::startup_perf::log(&format!("playlist ms={} segments={}", started.elapsed().as_millis(), segs.len()));
     Ok(arc)
 }
 
@@ -258,9 +287,11 @@ async fn load_segment(url: &str) -> Result<Seg, String> {
     let cell: SegCell = SEG_CACHE.lock().unwrap().cells.entry(url.to_string()).or_default().clone();
     let res = cell
         .get_or_init(|| async {
+            let started = std::time::Instant::now();
             let r = fetch_bytes(url).await.map(|(ct, b)| (ct, Arc::new(b)));
             if let Ok((_, b)) = &r {
                 seg_account(url, b.len());
+                crate::startup_perf::log(&format!("segment ms={} bytes={}", started.elapsed().as_millis(), b.len()));
             }
             r
         })
