@@ -4,6 +4,8 @@ mod net;
 mod session;
 mod startup_perf;
 #[cfg(target_os = "ios")]
+mod startup_cache;
+#[cfg(target_os = "ios")]
 mod ios;
 #[cfg(target_os = "ios")]
 mod ios_dns;
@@ -49,6 +51,10 @@ pub fn run() {
                 startup_perf::init(&dir);
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
+                #[cfg(target_os = "ios")]
+                if let Ok(cache) = app.path().app_cache_dir() {
+                    startup_cache::init(cache.join("startup-cache-v1"), state.session.token());
+                }
             }
             Ok(())
         })

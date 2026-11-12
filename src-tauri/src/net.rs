@@ -237,9 +237,15 @@ pub async fn edge(
 
 /// 拉原始字节（图片 / m3u8 / 分片）。
 pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String> {
+    #[cfg(target_os = "ios")]
+    let disk_key = crate::startup_cache::key(url);
+    #[cfg(target_os = "ios")]
+    if let Some(hit) = crate::startup_cache::get(&disk_key) { return Ok(hit); }
     let url = url.to_string();
     with_retry(|| {
         let url = url.clone();
+        #[cfg(target_os = "ios")]
+        let disk_key = disk_key.clone();
         async move {
             let mut request = CLIENT
                 .get(&url)
@@ -272,6 +278,14 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
             let bytes = resp.bytes().await.map_err(|e| err_text(&e))?.to_vec();
+            #[cfg(target_os = "ios")]
+            {
+                // Never freeze a live playlist. Persist raw VOD text; rewrite its loopback port on each launch.
+                let manifest = bytes.starts_with(b"#EXTM3U");
+                if !manifest || String::from_utf8_lossy(&bytes).contains("#EXT-X-ENDLIST") {
+                    crate::startup_cache::put(&disk_key, ctype.as_deref(), &bytes);
+                }
+            }
             Ok((ctype, bytes))
         }
     })
