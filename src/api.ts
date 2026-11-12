@@ -16,7 +16,10 @@ export const platform: "android" | "ios" | "windows" = isAndroid ? "android" : i
 
 /** 自定义协议：Windows 与 Android 是 http://<scheme>.localhost，iOS（WKWebView）是 <scheme>://localhost。
  *  必须和 src-tauri/src/lib.rs 的 LOCAL_ORIGIN 一致：播放列表里的分片地址按它改写。 */
-export const LOCAL = isIOS ? "hg://localhost" : "http://hg.localhost";
+export let LOCAL = isIOS ? "hg://localhost" : "http://hg.localhost";
+export async function initMedia() {
+  if (isIOS) LOCAL = await invoke<string>("media_origin");
+}
 
 /** 封面：经本地协议解密（站点封面是 AES 密文）。 */
 export const cover = (url?: string, _w = 480) =>

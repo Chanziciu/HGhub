@@ -6,6 +6,16 @@ mod session;
 mod ios;
 #[cfg(target_os = "ios")]
 mod ios_dns;
+#[cfg(target_os = "ios")]
+mod media_server;
+
+#[tauri::command]
+async fn media_origin(app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(target_os = "ios")]
+    { return Ok(app.state::<media_server::MediaOrigin>().0.clone()); }
+    #[cfg(not(target_os = "ios"))]
+    { let _ = app; Ok(LOCAL_ORIGIN.to_string()) }
+}
 
 use api::Api;
 use tauri::Manager;
@@ -31,6 +41,8 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Api::new())
         .setup(|app| {
+            #[cfg(target_os = "ios")]
+            app.manage(media_server::MediaOrigin(media_server::start()?));
             if let Ok(dir) = app.path().app_data_dir() {
                 let _ = std::fs::create_dir_all(&dir);
                 let state: tauri::State<Api> = app.state();
@@ -48,6 +60,7 @@ pub fn run() {
             });
         })
         .invoke_handler(tauri::generate_handler![
+            media_origin,
             repair_mobile_layout,
             api::app_boot,
             api::debug_log,
